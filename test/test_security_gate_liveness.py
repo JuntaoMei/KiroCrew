@@ -635,7 +635,13 @@ def _url_payload_command(n: int) -> str:
 #: was relaxed.
 #: Raised by 3, from 33,720, for the ``kas-mcp-launch`` leaf on the read+write floor
 #: (``paths_lists``): one entry and its two-line note; the floor only grows.
-_PACKAGE_LINE_BUDGET = 33_723
+#: Set to the true count, 33,713, which adds 22 lines for
+#: ``readonly_bash.command_names_git``, the no-approver hook surface's fail-closed
+#: git check: it folds a line continuation, removes the quotes and backslashes the
+#: shell removes, and refuses whenever ``git`` is left anywhere in the text. It is a
+#: plain substring test that parses no shell grammar, so it refuses more than it
+#: must rather than less.
+_PACKAGE_LINE_BUDGET = 33_713
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
