@@ -790,6 +790,9 @@ async def revive_session(
         state.push_slots_update()
 
     _audit_allowed(filed)
+    # The revived session leaves the Older Sessions listing, and the turn that
+    # revived it ends with ``turn_end``, which does not re-read that listing.
+    state.push_refresh("history")
     # After the audit: the revive is committed, and its allowed row is owed first.
     await asyncio.shield(session_managers.rebind_resumed(slot, str(meta.get("tab_id") or "")))
     return {
