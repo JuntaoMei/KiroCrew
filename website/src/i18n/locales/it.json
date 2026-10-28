@@ -9016,7 +9016,8 @@
       "unmute_failed": "Impossibile riattivare l'audio di questa sessione",
       "open_in_kiro_cli": "Apri in kiro-cli",
       "open_in_kiro_cli_tooltip": "Continua questa conversazione in kiro-cli nel terminale. Questa chat resta in pausa finché kiro-cli non termina.",
-      "open_in_kiro_cli_default_agent": "Si apre con l’agente predefinito di kiro-cli. {{agent}} non ha un file agente che kiro-cli possa caricare.",
+      "open_in_kiro_cli_default_agent": "kiro-cli userà il proprio agente predefinito, non {{agent}}.",
+      "open_in_kiro_cli_note": "Si apre nel pannello del terminale. Scrivi /quit lì o chiudi la sua scheda per tornare a questa chat.",
       "kiro_cli_check_failed": "Impossibile verificare kiro-cli",
       "kiro_cli_blocked_no_session": "ancora nessuna conversazione",
       "kiro_cli_blocked_no_log": "registro della conversazione mancante",
@@ -9025,8 +9026,12 @@
       "kiro_cli_blocked_already_open": "già aperto",
       "kiro_cli_blocked_unavailable": "non disponibile",
       "kiro_cli_blocked_terminals_full": "schede del terminale piene",
-      "kiro_cli_blocked_project_agent": "il progetto ha una propria configurazione kiro-cli",
-      "kiro_cli_blocked_ended": "kiro-cli è terminato"
+      "kiro_cli_blocked_project_agent": "il progetto ha un proprio .kiro/agents o file MCP",
+      "kiro_cli_blocked_ended": "kiro-cli è terminato",
+      "kiro_cli_blocked_launch_spec": "Crew non è riuscito a scrivere una copia temporanea dell’agente in ~/.kiro/agents",
+      "kiro_cli_blocked_record": "Crew non è riuscito a salvare la nota di questa apertura nella sua cartella dati",
+      "kiro_cli_blocked_session_file": "Crew non è riuscito ad aggiornare il file di sessione di questa chat in ~/.kiro/sessions/cli",
+      "kiro_cli_blocked_starting": "l’agente si sta ancora avviando"
     },
     "newFolderMoveDialog": {
       "cancel": "Annulla",

@@ -1,7 +1,7 @@
 /**
  * "Open in kiro-cli" in the session menu: when it shows, why it is disabled,
- * what it says about the agent, and that choosing it opens a docked terminal tab
- * that names only the chat.
+ * what it says will happen and about the agent, and that choosing it opens a
+ * docked terminal tab that names only the chat, labelled with its title.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -11,6 +11,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 const mocks = vi.hoisted(() => ({
   chatSlotKiroCli: vi.fn(),
   terminalEnabled: true,
+  poppedOut: false,
+  bringBack: vi.fn(),
+}))
+vi.mock('../utils/terminalPopout', async (orig) => ({
+  ...(await orig<typeof import('../utils/terminalPopout')>()),
+  isPopoutOpen: () => mocks.poppedOut,
+  bringBack: () => { mocks.bringBack(); mocks.poppedOut = false },
 }))
 vi.mock('../api/client', () => ({
   api: new Proxy(mocks as Record<string, unknown>, {
@@ -35,14 +42,14 @@ function ItemStub({ onSelect, disabled, children, ...rest }: {
 
 function Tabs() {
   const { tabs } = useBottomTerminal()
-  return <output data-testid="tabs">{JSON.stringify(tabs.map(t => ({ kiroCliSlot: t.kiroCliSlot, cwd: t.cwd, chatSlot: t.chatSlot })))}</output>
+  return <output data-testid="tabs">{JSON.stringify(tabs.map(t => ({ kiroCliSlot: t.kiroCliSlot, cwd: t.cwd, chatSlot: t.chatSlot, name: t.name })))}</output>
 }
 
-function renderItem(running = false) {
+function renderItem(running = false, title?: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <OpenInKiroCliItem slotKey="chat-1" running={running} Item={ItemStub} />
+      <OpenInKiroCliItem slotKey="chat-1" title={title} running={running} Item={ItemStub} />
       <Tabs />
     </QueryClientProvider>,
   )
@@ -52,7 +59,27 @@ describe('OpenInKiroCliItem', () => {
   beforeEach(() => {
     mocks.chatSlotKiroCli.mockReset()
     mocks.terminalEnabled = true
+    mocks.poppedOut = false
+    mocks.bringBack.mockReset()
     __resetBottomTerminal()
+  })
+
+  it('brings a popped-out panel back so this window opens the tab', async () => {
+    mocks.chatSlotKiroCli.mockResolvedValue({ available: true, agent: 'kirocrew', agent_without_spec: '' })
+    mocks.poppedOut = true
+    renderItem()
+    const user = userEvent.setup()
+    await user.click(await screen.findByTestId('open-in-kiro-cli'))
+    expect(mocks.bringBack).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('tabs').textContent).toBe(JSON.stringify([{ kiroCliSlot: 'chat-1' }]))
+  })
+
+  it('leaves a docked panel where it is', async () => {
+    mocks.chatSlotKiroCli.mockResolvedValue({ available: true, agent: 'kirocrew', agent_without_spec: '' })
+    renderItem()
+    const user = userEvent.setup()
+    await user.click(await screen.findByTestId('open-in-kiro-cli'))
+    expect(mocks.bringBack).not.toHaveBeenCalled()
   })
 
   it('opens a docked tab that names only the chat', async () => {
@@ -65,12 +92,31 @@ describe('OpenInKiroCliItem', () => {
     expect(JSON.parse(screen.getByTestId('tabs').textContent ?? '[]')).toHaveLength(1)
   })
 
-  it('says when kiro-cli opens with its default agent', async () => {
+  it('says on the row where it opens and how to come back to the chat', async () => {
+    mocks.chatSlotKiroCli.mockResolvedValue({ available: true, agent: 'kirocrew', agent_without_spec: '' })
+    renderItem()
+    expect(await screen.findByTestId('open-in-kiro-cli-note')).toHaveTextContent('Opens in the terminal panel. Type /quit there or close its tab to return to this chat.')
+  })
+
+  it('says in its hover text when kiro-cli opens with its default agent', async () => {
     mocks.chatSlotKiroCli.mockResolvedValue({ available: true, agent: '', agent_without_spec: 'kirocrew-heartbeat' })
     renderItem()
-    expect(await screen.findByTestId('open-in-kiro-cli-agent-note')).toHaveTextContent(
-      "Opens with kiro-cli's default agent. kirocrew-heartbeat has no agent file kiro-cli can load.",
+    const row = await screen.findByTestId('open-in-kiro-cli')
+    expect(row).toHaveAttribute(
+      'title',
+      "Continue this conversation in kiro-cli in the terminal. This chat pauses until kiro-cli exits. "
+        + 'kiro-cli will use its own default agent, not kirocrew-heartbeat.',
     )
+    expect(screen.getByTestId('open-in-kiro-cli-note')).toHaveTextContent('Opens in the terminal panel. Type /quit there or close its tab to return to this chat.')
+  })
+
+  it('labels the tab with the chat title', async () => {
+    mocks.chatSlotKiroCli.mockResolvedValue({ available: true, agent: 'kirocrew', agent_without_spec: '' })
+    renderItem(false, 'Fix the login bug')
+    await userEvent.click(await screen.findByTestId('open-in-kiro-cli'))
+    expect(JSON.parse(screen.getByTestId('tabs').textContent ?? '[]')).toEqual([
+      { kiroCliSlot: 'chat-1', name: 'Fix the login bug' },
+    ])
   })
 
   it('is disabled with the reason while the chat cannot open yet', async () => {
@@ -79,6 +125,7 @@ describe('OpenInKiroCliItem', () => {
     const row = await screen.findByRole('button', { name: /Open in kiro-cli/ })
     expect(row).toBeDisabled()
     expect(row).toHaveTextContent('no conversation yet')
+    expect(screen.queryByTestId('open-in-kiro-cli-note')).toBeNull()
   })
 
   it('is disabled while a turn runs', async () => {
