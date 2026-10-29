@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import os as _kernel_os
 
 # Bound for the spawn audit (``test/test_spawn_audit.py``), which finds a spawn through
 # the modules a file imports; the probes that spawn with it read the client's binding.
@@ -63,8 +64,37 @@ def _get_child_pids(parent_pid: int | None, _visited: set[int] | None = None) ->
     return all_pids
 
 
+# Whether this kernel provides ``/proc/<pid>/task/<tid>/children``: None until
+# ``_children_interface`` first asks, then fixed for the process.
+_CHILDREN_INTERFACE: bool | None = None
+
+
+def _children_interface() -> bool:
+    """Whether the running kernel has the per-task ``children`` files.
+
+    Asked once of the real ``/proc/self`` through the stdlib ``os`` (``_kernel_os``), never through
+    the facade ``Path`` the walk reads: a test that routes the walk's ``/proc`` to a
+    fake tree must not decide the cached answer for every later walk.
+    """
+    global _CHILDREN_INTERFACE
+    if _CHILDREN_INTERFACE is None:
+        _CHILDREN_INTERFACE = _kernel_os.path.exists(
+            f"/proc/self/task/{threading.get_native_id()}/children"
+        )
+    return _CHILDREN_INTERFACE
+
+
 def _direct_children(pid: int) -> list[int]:
     """Return direct child PIDs. Uses /proc on Linux, pgrep on other POSIX.
+
+    On Linux the per-task ``children`` files are the answer, empty included, so a
+    leaf costs no spawn. A pid with no ``/proc`` entry has exited and is a leaf. A
+    task that exits mid-scan hands its children to a sibling thread the scan may
+    already have read, so a vanished task file re-lists the task directory once.
+    proc(5) calls these files exact only for stopped children; the walk's callers
+    absorb that race, since ``guarded_tree_pass`` walks twice and walks again
+    after 0.5 s when the first walk finds nothing. pgrep is the fallback only for a
+    kernel without the files (``_CHILDREN_INTERFACE``).
 
     Windows: returns ``[]`` — there is no pgrep, and the tree kill goes through
     ``kill_process_tree`` (``taskkill /T``), which walks descendants itself, so
@@ -74,19 +104,30 @@ def _direct_children(pid: int) -> list[int]:
 
     if platform_compat.IS_WINDOWS:
         return []
-    if sys.platform == "linux":
-        try:
-            children: list[int] = []
-            tasks_dir = Path(f"/proc/{pid}/task")
-            if tasks_dir.is_dir():
-                for tid in tasks_dir.iterdir():
-                    cf = tid / "children"
-                    if cf.exists():
-                        children.extend(int(p) for p in cf.read_text().split() if p.strip())
-            if children:
+    if sys.platform == "linux" and _children_interface():
+        # pgrep -P scans every /proc entry: 275 to 428 ms a call at about 3,000
+        # processes, against about 0.2 ms for these files. Asked once per leaf, it
+        # pushed a 6-leaf tree walked twice past the 3 s TREE_REFRESH_TIMEOUT.
+        tasks_dir = Path(f"/proc/{pid}/task")
+        children: list[int] = []
+        for _ in range(2):
+            try:
+                tids = list(tasks_dir.iterdir())
+            except OSError:
+                # Exited before this listing: a leaf, or the first pass's children.
                 return children
-        except Exception:
-            pass  # fall through to pgrep
+            children = []
+            vanished = False
+            for tid in tids:
+                try:
+                    text = (tid / "children").read_text()
+                except OSError:
+                    vanished = True
+                    continue
+                children.extend(int(p) for p in text.split() if p.isdigit())
+            if not vanished:
+                break
+        return children
     try:
         # timeout so a hung pgrep cannot occupy a subprocess_executor worker
         # indefinitely (the ps spawns in _get_start_time/_read_basename already
