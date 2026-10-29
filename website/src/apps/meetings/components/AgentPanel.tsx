@@ -41,7 +41,7 @@
 // that the agent has written more since. HTML and chat agents are not editable; see
 // `EDITABLE_WIDGET_TYPE` in the backend constants for why.
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   FileText,
   MessageSquare,
@@ -79,6 +79,12 @@ interface Props {
   /** Absent for an agent whose output is not editable (html widgets, chat agents). */
   onSaveOutput?: (content: string) => Promise<unknown>
   onRevertOutput?: () => Promise<unknown>
+  /**
+   * Told `true` while this panel holds a minutes draft that differs from its
+   * seed, and `false` once it no longer does or the panel unmounts. The draft is
+   * local state, so a parent that navigates away needs this to ask first.
+   */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 export default function AgentPanel({
@@ -93,6 +99,7 @@ export default function AgentPanel({
   onSendMessage,
   onSaveOutput,
   onRevertOutput,
+  onDirtyChange,
 }: Props) {
   const ime = useImeGuard()
   const { confirm, confirmDialog } = useConfirm()
@@ -113,14 +120,23 @@ export default function AgentPanel({
   const showChat = chatView || isChatAgent
   const editable = onSaveOutput != null && !showChat
   const editing = draft !== null
-  // The session hook's toast fades; a save or revert that did not land is a state
-  // this panel must keep showing until the next attempt.
-  const [outputError, setOutputError] = useState<string | null>(null)
   // THIS panel's save, distinct from the `editSaving` prop: that prop is
   // session-wide (any panel's save or revert), which is right for disabling the
   // controls but wrong for the button label — an idle panel must not read
   // "Saving…" because a sibling agent's write is in flight.
   const [savePending, setSavePending] = useState(false)
+  // Same dirty rule as `cancelEdit`: against the seed, never the live output.
+  // A draft whose save is still in flight also counts: until the request lands,
+  // the seed does not yet say what the server holds.
+  const dirty = draft !== null && (savePending || draft.text !== draft.seed)
+  useEffect(() => {
+    if (!dirty || onDirtyChange == null) return
+    onDirtyChange(true)
+    return () => onDirtyChange(false)
+  }, [dirty, onDirtyChange])
+  // The session hook's toast fades; a save or revert that did not land is a state
+  // this panel must keep showing until the next attempt.
+  const [outputError, setOutputError] = useState<string | null>(null)
 
   const saveDraft = async () => {
     if (draft === null || onSaveOutput == null) return
@@ -139,8 +155,12 @@ export default function AgentPanel({
     }
     // Saving is asynchronous but the textarea remains editable. Only close the
     // exact snapshot the request persisted; text typed while it was in flight is
-    // still a local draft and must stay on screen.
-    setDraft(current => current !== null && current.text === submittedDraft ? null : current)
+    // still a local draft and must stay on screen. Its seed moves to the text
+    // the server now holds, so an edit back to the old seed still reads dirty.
+    setDraft(current => {
+      if (current === null || current.text === submittedDraft) return null
+      return { seed: submittedDraft, text: current.text }
+    })
   }
 
   const requestRevert = async () => {
