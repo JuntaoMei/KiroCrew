@@ -113,8 +113,25 @@ class TestSessionCreateAgentKind:
         )
         assert out.startswith("Error: could not create a session:")
         assert 'agent_kind: "template"' not in out
-        assert "re-select" in out
         assert "own chat tab" in out
+        assert "start a new chat with this session's agent" in out
+        assert "member-" not in out
+
+    @pytest.mark.parametrize("kind", ["template", None])
+    def test_no_delegation_remedy_promises_that_picking_the_agent_again_helps(
+        self, kind: str | None
+    ) -> None:
+        # A chat that reaches this refusal has messages, so picking its agent again
+        # is refused for a different member and never vouches for the same one. A
+        # remedy that sends the owner to the picker is one that cannot work.
+        args = {"title": "worker", "agent": "kirocrew-worker"}
+        if kind:
+            args["agent_kind"] = kind
+        out, _ = _call("session_create", args, {"POST /api/session-control/create": self._DENIED})
+        lowered = out.lower()
+        for promise in ("re-select", "reselect", "re-bind", "rebind", "re-pick"):
+            assert promise not in lowered
+        assert "picking an agent again in this chat does not" in out
 
     def test_other_refusals_carry_no_remedy(self) -> None:
         out, _ = _call(
