@@ -439,7 +439,16 @@ class TestLeafOnlyPopulationIsRecorded:
     #:   republished by a rename INSIDE the directory, so the directory's own inode
     #:   stays the same, as for ``seed-provenance``; at the data-home root beside
     #:   writable siblings, so leaf-only is the only hold.
-    EXPECTED: dict[str, int] = {"standard": 309, "cc": 316, "strict": 317}
+    #:
+    #: One more root-level directory, three entries per tier:
+    #:
+    #: * ``kirocrew-bin`` -- the one ``kirocrew`` link ``env.augmented_path`` puts
+    #:   ahead of ``~/.local/bin`` on every agent PATH, sealed read-only so an agent
+    #:   cannot plant the ``kirocrew`` every later lookup runs. The gateway replaces
+    #:   the link by a rename INSIDE the directory, so the directory's own inode
+    #:   stays the same; at the data-home root beside writable siblings, so
+    #:   leaf-only is the only hold, as for ``models``.
+    EXPECTED: dict[str, int] = {"standard": 312, "cc": 319, "strict": 320}
 
     @pytest.mark.parametrize("tier", TIERS)
     def test_leaf_only_count_has_not_grown(self, tier: str) -> None:
