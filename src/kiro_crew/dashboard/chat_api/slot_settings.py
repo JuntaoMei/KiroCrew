@@ -305,8 +305,10 @@ async def _slot_harness_managed_backend(state: DashboardState, slot: Any) -> str
     """Backend id when *slot*'s session compacts on its own, else ``None``.
 
     A backend in ``ACP_BACKENDS_HARNESS_MANAGED_COMPACTION`` (KAS) runs its own
-    summarization, and the turn-end gate declines Crew's ``/compact`` for it at
-    any threshold, so the popover says the slider does not apply there. The
+    summarization, and at the global threshold the turn-end gate declines
+    Crew's ``/compact`` for it, so the popover says the threshold does not apply
+    while the session follows the global. An override or an agent default is
+    honoured, and the popover hides the note then. The
     live session's provider answers when one exists; otherwise the answer is
     for the backend the slot's next session starts on, chosen by the same
     member-aware selector a new session uses.
