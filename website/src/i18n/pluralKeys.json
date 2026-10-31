@@ -424,5 +424,9 @@
   "apps.codeReviewSage.components.prStatusChips.failing_count",
   "apps.autoResearch.researchLabPage.estimate",
   "apps.autoResearch.researchLabPage.findings_tally",
-  "apps.autoResearch.researchLabPage.cycles_count"
+  "apps.autoResearch.researchLabPage.cycles_count",
+  "pages.chat.gatewayNotice.turn_limit_minutes",
+  "pages.chat.gatewayNotice.turn_limit_hours",
+  "pages.chat.gatewayNotice.background_turn_waited",
+  "pages.chat.gatewayNotice.eager_spawn_stopped"
 ]
