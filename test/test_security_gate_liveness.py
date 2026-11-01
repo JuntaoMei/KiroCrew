@@ -640,7 +640,11 @@ def _url_payload_command(n: int) -> str:
 #: shape regex, the operator-listed lookup that reads the file only for that shape,
 #: its once-per-endpoint audit, and the second counterfactual keyword that keeps
 #: MCP discovery from assuming an operator entry. No check was relaxed elsewhere.
-_PACKAGE_LINE_BUDGET = 33_735
+#: Raised by 68, from 33,735, for ``scan_history`` reading ``sessions/*.jsonl``
+#: (``memory_audit``): the transcript row shapes, row-time merge across files and
+#: the unreadable-file finding, so ``security audit`` never reports an unread
+#: scan as clean. No check was relaxed.
+_PACKAGE_LINE_BUDGET = 33_803
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
