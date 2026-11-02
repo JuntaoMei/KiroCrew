@@ -63,12 +63,14 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         list_agents,
     )
     from kiro_crew.agent_discovery_parts.dir_revision import (  # noqa: F401
+        _AGENTS_DIR_ALL_ENTRIES_MAX_DIGEST_BYTES,
         _AGENTS_DIR_MEMO_MAX_KEYS,
         _AGENTS_DIR_RACY_MAX_DIGEST_BYTES,
         _AGENTS_DIR_RACY_MAX_DIGESTS,
         _AGENTS_DIR_RACY_WINDOW_NS,
         _DIGEST_CHUNK_BYTES,
         _NO_DIGEST,
+        _PIN_EVERY_ENTRY_ON_BYTES,
         AGENTS_DIR_MEMO_ENABLED,
         AgentsDirMemo,
         AgentsDirRevision,
@@ -140,6 +142,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _warn_on_systematic_scan_failure,
         agent_spec_stems,
         apple_double_sidecar,
+        iter_declared_specs,
         plain_markdown_document,
         read_agent_spec_strict,
         spec_by_declared_name,
