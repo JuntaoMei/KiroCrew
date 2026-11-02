@@ -117,7 +117,12 @@ _ACTIVE_STATUSES = frozenset({STATUS_STARTING, STATUS_NUDGING})
 #: could not open a PR at all. There is nothing live to watch in that case.
 _QUEUED_PREFIX = "QUEUED:"
 #: Accept either provider's PR shape — the app reads both through ``pr_checks``.
-_PR_URL_RE = re.compile(r"^https://[^\s]+/(?:pull|merge_requests)/\d+", re.IGNORECASE)
+#: A GitLab MR is only ever ``/-/merge_requests/<n>``: the ``/-/`` separator keeps
+#: a GitHub repo literally named ``merge_requests`` on the GitHub side.
+_PR_URL_RE = re.compile(r"^https://[^\s]+/(?:pull|-/merge_requests)/\d+", re.IGNORECASE)
+#: The GitLab MR path shape, matched against the PARSED path (not the raw URL),
+#: so a query string or fragment cannot fake the provider signal.
+_MR_PATH_RE = re.compile(r"^/(?:[^/]+/)+-/merge_requests/\d+/?$", re.IGNORECASE)
 
 
 # ── clone isolation (the safety control) ─────────────────────────────────────
@@ -230,8 +235,18 @@ def _is_merge_request_url(pr: str) -> bool:
 
     The URL shape is the provider signal the watcher already trusts —
     :func:`is_watchable_pr` accepts both shapes — so no config read is needed here.
+
+    Only the GitLab shape ``/<namespace>/<project>/-/merge_requests/<n>`` on the
+    parsed path counts. A bare substring test would route a GitHub repo named
+    ``merge_requests`` (``github.com/o/merge_requests/pull/1``) to ``glab``.
     """
-    return "/merge_requests/" in str(pr or "")
+    try:
+        from urllib.parse import urlparse
+
+        path = urlparse(str(pr or "").strip()).path
+    except ValueError:
+        return False
+    return bool(_MR_PATH_RE.match(path))
 
 
 def neutralize_origin(clone: str) -> None:
