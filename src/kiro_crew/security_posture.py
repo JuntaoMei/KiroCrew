@@ -113,7 +113,7 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # Gate-side: the KAS agent projection asks whether the redactor WOULD
         # change a third-party MCP server's literal env value and WITHHOLDS the
         # value from the wire when it would. Nothing it emits is redacted text.
-        "acp/kas_agents.py",
+        "acp/kas_env_literals.py",
         # Consumes that redactor as a yes/no predicate, not as a rewrite:
         # `is_dispatchable_member_name` asks whether a stored Crew Member name
         # WOULD need redaction and refuses the pin when it would. Nothing is

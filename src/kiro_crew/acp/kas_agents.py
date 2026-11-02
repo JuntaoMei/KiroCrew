@@ -77,6 +77,13 @@ from kiro_crew.acp.kas_app_identity import (
     without_noop_restrictions,
 )
 from kiro_crew.acp.kas_auto_approve import auto_approve_refs
+from kiro_crew.acp.kas_env_literals import (  # noqa: F401 - re-exported import path
+    _PLAIN_WORD,
+    _RELAYABLE_BOOLEANS,
+    _credential_shaped_env_key,
+    _loggable_key_names,
+    _relayable_literal,
+)
 from kiro_crew.acp.kas_permissions import (
     AUTO_APPROVABLE_CAPABILITIES,
     CREW_ANSWERED_BUILTINS_KEY,
@@ -112,7 +119,12 @@ from kiro_crew.mcp_cleanup import (
     KIROCREW_BIN_MCP_SERVERS,
     MCP_REGISTRY_TYPE,
     mcp_entry_is_muted,
-    mcp_entry_is_registry_governed,
+)
+from kiro_crew.mcp_oauth_projection import (
+    oauth_lost_keys,
+    registry_withheld,
+    servers_with_discarded_oauth,
+    withhold_oauth,
 )
 from kiro_crew.platform.governance import may_grant_builtin_at_gate_now, may_skip_gate_now
 from kiro_crew.platform.tool_names import (
@@ -226,7 +238,10 @@ SPEC_KEYS_WITHOUT_CARRIER = UNSUPPORTED_SPEC_KEYS - {"hooks", "toolsSettings"}
 
 
 def spec_keys_without_carrier(
-    spec: dict[str, Any], *, translates_tools_settings: bool = False
+    spec: dict[str, Any],
+    *,
+    translates_tools_settings: bool = False,
+    discards_mcp_oauth: bool = False,
 ) -> list[str]:
     """What *spec* sets that the session runs without, sorted.
 
@@ -234,8 +249,14 @@ def spec_keys_without_carrier(
     whole too, unless *translates_tools_settings* says this session receives its
     ``permissions`` translation (KAS only); then each ``toolsSettings.<tool>.<key>``
     the translation cannot carry is named instead.
+
+    *discards_mcp_oauth* says this session's backend drops a remote MCP server's
+    ``oauth`` block (KAS only); each declared server that sets one is then named
+    as ``mcpServers.<name>.oauth``.
     """
     lost = [k for k in SPEC_KEYS_WITHOUT_CARRIER if spec.get(k)]
+    if discards_mcp_oauth:
+        lost.extend(oauth_lost_keys(servers_with_discarded_oauth(spec, _registry_governed)))
     tools_settings = spec.get("toolsSettings")
     if not translates_tools_settings:
         if tools_settings:
@@ -744,8 +765,7 @@ def _project_mcp_servers(
                 ),
             )
             continue
-        marked = mcp_entry_is_registry_governed(entry)
-        if not managed and (registry_mode or marked):
+        if registry_withheld(name, entry, registry_mode):
             logger.info(
                 "agent %r: withholding MCP server %r — %s",
                 agent_id,
@@ -793,6 +813,7 @@ def _project_mcp_servers(
         projected = {k: v for k, v in entry.items() if k not in _WRAPPER_MARKERS}
         projected.pop("autoApprove", None)
         labelled, relay_env = session_label.take_kas_marker(projected, entry.get("env"), managed)
+        withhold_oauth(projected, agent_id=agent_id, name=name, logger=logger)
         discarded = [k for k in _KAS_DISCARDED_ENTRY_KEYS if projected.get(k)]
         if discarded:
             # Read off the PROJECTED entry, not the spec's: a key this function
@@ -847,76 +868,6 @@ def _project_mcp_servers(
             )
         out[name] = session_label.with_kas_label(projected, session_key if labelled else None)
     return out
-
-
-#: The only literal values a third-party server's env may send over the KAS
-#: wire: a boolean, ``true`` or ``false``, matched case-insensitively after
-#: trimming. No secret is a boolean, so this holds by construction, with no
-#: guess about which key names or value shapes carry one. Everything else,
-#: numbers included (a PIN is digits), is withheld and named in the log; the
-#: rest of the env reaches the server through a local launcher that keeps it
-#: off the wire.
-_RELAYABLE_BOOLEANS = frozenset({"true", "false"})
-
-#: A key NAME printed in the log as written. Only a plain word the redactor
-#: leaves alone is printed; any other name is counted.
-_PLAIN_WORD = re.compile(r"[A-Za-z0-9._-]{1,256}")
-
-#: A camelCase boundary (``accessKey`` -> ``access_Key``), so a credential word
-#: joined by case alone still ends a segment for the shared class.
-_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
-_NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
-
-
-def _credential_shaped_env_key(key: str) -> bool:
-    """Whether the env KEY *key* names a credential.
-
-    The one shared answer, ``config.sections_agent_env.AGENT_ENV_CREDENTIAL_CLASS``,
-    on the name split at punctuation and camelCase (``encryptionKey`` reads as
-    ``ENCRYPTION_KEY``), plus the gateway's own credential prefixes.
-    """
-    from kiro_crew.config.sections_agent_env import AGENT_ENV_CREDENTIAL_CLASS
-    from kiro_crew.mcp_gateway.hashing import is_secret_env_key
-    from kiro_crew.mcp_gateway.manager import is_credential_env_key
-
-    normal = _NON_ALNUM.sub("_", _CAMEL_BOUNDARY.sub("_", key)).upper()
-    if is_secret_env_key(normal) or is_credential_env_key(normal):
-        return True
-    return bool(AGENT_ENV_CREDENTIAL_CLASS.search(normal))
-
-
-def _relayable_literal(key: str, value: Any) -> bool:
-    """Whether a third-party server's literal env *value* under *key* may cross the wire.
-
-    Only a boolean (:data:`_RELAYABLE_BOOLEANS`), and only when the KEY is not
-    credential-shaped (:func:`_credential_shaped_env_key`) and the credential
-    redactor would leave the value unchanged alone and spelled beside its key,
-    through :func:`kiro_crew.external_text.redact_external_text` so an edition's
-    extra patterns apply. The value is relayed as written.
-    """
-    if not isinstance(value, str) or not isinstance(key, str):
-        return False
-    if value.strip().lower() not in _RELAYABLE_BOOLEANS:
-        return False
-    if _credential_shaped_env_key(key):
-        return False
-    from kiro_crew.external_text import redact_external_text
-
-    return all(
-        redact_external_text(text) == text for text in (value, f"{key}={value}", f"{key}: {value}")
-    )
-
-
-def _loggable_key_names(keys: list[str]) -> str:
-    """*keys* for a log line: a name shown only when it is itself a plain word the
-    redactor leaves alone, so a credential-shaped NAME is counted, never printed."""
-    from kiro_crew.external_text import redact_external_text
-
-    shown = sorted(k for k in keys if _PLAIN_WORD.fullmatch(k) and redact_external_text(k) == k)
-    hidden = len(keys) - len(shown)
-    if hidden:
-        shown.append(f"{hidden} unnamed")
-    return ", ".join(shown)
 
 
 def _withhold_credential_fields(
