@@ -192,6 +192,8 @@ def test_no_sandbox_setting_is_forced_to_a_permissive_value(sandbox_keys) -> Non
     * The non-boolean mode must not be the gateway's own disabling value, read from
       ``JAIL_MODE_OFF`` rather than spelled here, and must be one the schema declares --
       so a typo naming no real mode is caught as well.
+    * A list-valued setting can only narrow what the agent may write, so it must equal
+      ``AgentConfig``'s own default.
 
     Which settings are booleans is read from ``AgentConfig``'s own defaults, so this does
     not need to know their names either.
@@ -209,6 +211,14 @@ def test_no_sandbox_setting_is_forced_to_a_permissive_value(sandbox_keys) -> Non
                 f"{key} is forced to {value!r}. Every boolean sandbox setting is a way to "
                 "run with less isolation than the host offers, and this container writes "
                 "the protective value for all of them."
+            )
+        elif isinstance(getattr(declared, key), list):
+            # A list-valued sandbox setting only ever NARROWS what the agent may write
+            # (``sandbox_readonly_paths`` and its exceptions), so no value of it is less
+            # isolated than the default. The container states that default.
+            assert value == getattr(declared, key), (
+                f"{key} is forced to {value!r}, not the gateway's own default "
+                f"{getattr(declared, key)!r}"
             )
         else:
             assert value != JAIL_MODE_OFF, (
