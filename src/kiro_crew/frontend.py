@@ -15,16 +15,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import errno
 import logging
 import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Iterator, Optional
+from typing import BinaryIO, Callable, Iterator, Literal, Optional
 
 from kiro_crew import platform_compat
 from kiro_crew.atomic_write import replace_with_retry
@@ -91,7 +93,7 @@ _STAGING_LOCK_TIMEOUT = float(
 _REAP_TIMEOUT = 30
 # Seconds to wait for a SIGKILLed build to be reaped before giving up. SIGKILL is
 # not catchable, so this only covers the kernel tearing the tree down; there are
-# no pipes to drain because the build's output goes to DEVNULL.
+# no pipes to drain because the build's output goes to DEVNULL or a log file.
 _BUILD_KILL_GRACE = 10
 #: How long ``python -m kiro_crew.frontend stage`` waits for the staging lock.
 #: A holder is a Kiro Crew build that publishes its own bundle, so a stager
@@ -452,6 +454,153 @@ def _print_safe(message: str) -> None:
         pass
 
 
+#: The install and build output of the last update-driven frontend build, under
+#: the data home's ``logs/``. One fixed name, overwritten by each run.
+_BUILD_LOG_NAME = "frontend-build.log"
+_BUILD_LOG_TAIL_LINES = 20
+_BUILD_LOG_TAIL_BYTES = 8192
+_BUILD_LOG_TAIL_CHARS = 2000
+
+
+@dataclasses.dataclass(frozen=True)
+class FrontendBuildResult:
+    """What :func:`build_frontend_sync` / :func:`build_frontend_async` did.
+
+    ``outcome`` is ``"built"`` (``static/dist`` now serves the new bundle),
+    ``"skipped"`` (nothing to build here: no ``website/``, no npm, or edition
+    sources absent -- the shipped bundle stays, as before) or ``"failed"`` (a
+    build was attempted and ``static/dist`` still serves the previous bundle).
+    An update must not restart onto the new backend after ``"failed"``.
+    """
+
+    outcome: Literal["built", "skipped", "failed"]
+    log_path: Optional[Path] = None
+    tail: str = ""
+
+    def failure_message(self) -> str:
+        """One message naming the failure, the log file and its last lines."""
+        message = "Frontend build did not complete — the dashboard still serves the previous bundle"
+        if self.log_path is not None:
+            message += f". Build output: {self.log_path}"
+        if self.tail:
+            message += f"\n{self.tail}"
+        return message
+
+
+_SKIPPED = FrontendBuildResult("skipped")
+
+
+def _open_build_log() -> tuple[Optional[BinaryIO], Optional[Path]]:
+    """Open ``<data home>/logs/frontend-build.log`` for this run (``0600``, emptied).
+
+    A file, not a pipe: the build's descendants can outlive a timeout kill, and
+    a pipe would make the post-kill drain wait for every one of them inside the
+    staging-lock holder. A file has nothing to drain. Never raises: without a
+    log the build still runs, with its output discarded as before.
+
+    ``logs/`` is writable from inside the agent sandbox, while this runs in the
+    unsandboxed gateway. So neither ``logs`` nor the log name is followed when
+    it is a link, and the file is emptied only once its descriptor is a plain
+    file with no second name: a planted symlink or hard link to another file
+    (``security_policy.json``) would otherwise have that file truncated and
+    overwritten. A refused destination discards the output.
+    """
+    try:
+        from kiro_crew.config.paths import config_dir
+        from kiro_crew.owner_only_files import mkdirs_owner_only
+
+        home = config_dir()
+        logs_dir = home / "logs"
+        mkdirs_owner_only(logs_dir)
+        path = logs_dir / _BUILD_LOG_NAME
+        fd = _open_log_fd_nofollow(home, path)
+    except (OSError, ValueError):
+        return None, None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise OSError(errno.EPERM, "not a plain file with one name", str(path))
+        os.ftruncate(fd, 0)
+        return os.fdopen(fd, "w+b"), path
+    except (OSError, ValueError):
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        return None, None
+
+
+def _open_log_fd_nofollow(home: Path, path: Path) -> int:
+    """Open *path* read-write, created ``0600``, following no link below *home*."""
+    from kiro_crew.owner_only_files import OWNER_ONLY_FILE_MODE
+
+    # No O_CREAT here: open_create_or_existing adds it, exclusively first, so a
+    # peer creating the same name cannot make this open fail (Darwin ENOENT).
+    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow and os.open in os.supports_dir_fd:
+        dir_fd = os.open(str(home), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            for part in path.parent.relative_to(home).parts:
+                child = os.open(
+                    part, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow, dir_fd=dir_fd
+                )
+                os.close(dir_fd)
+                dir_fd = child
+            return platform_compat.open_create_or_existing(
+                path.name, flags | nofollow, OWNER_ONLY_FILE_MODE, dir_fd=dir_fd
+            )
+        finally:
+            os.close(dir_fd)
+    # No O_NOFOLLOW / dir_fd (Windows): refuse a link by name, then confirm the
+    # opened descriptor is the very file that was checked.
+    for candidate in (path.parent, path):
+        if os.path.islink(candidate):
+            raise OSError(errno.ELOOP, "refusing a link", str(candidate))
+    fd = platform_compat.open_create_or_existing(str(path), flags, OWNER_ONLY_FILE_MODE)
+    try:
+        opened, named = os.fstat(fd), os.lstat(path)
+        if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+            raise OSError(errno.EPERM, "log file changed while it was opened", str(path))
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _log_step(build_log: Optional[BinaryIO], npm_args: list[str]) -> None:
+    """Head each step's output in the build log with the npm command that produced it."""
+    if build_log is None:
+        return
+    with contextlib.suppress(OSError, ValueError):
+        build_log.write(("$ npm " + " ".join(npm_args) + "\n").encode())
+        build_log.flush()
+
+
+def _build_log_tail(build_log: Optional[BinaryIO]) -> str:
+    """The last lines of the build log, redacted and capped. Never raises.
+
+    Read through the descriptor the build wrote to, never by reopening the
+    name, so a link swapped in afterwards cannot point the read elsewhere.
+    """
+    if build_log is None:
+        return ""
+    try:
+        build_log.flush()
+        size = os.fstat(build_log.fileno()).st_size
+        build_log.seek(max(0, size - _BUILD_LOG_TAIL_BYTES))
+        data = build_log.read()
+    except (OSError, ValueError):
+        return ""
+    lines = data.decode("utf-8", errors="replace").splitlines()[-_BUILD_LOG_TAIL_LINES:]
+    from kiro_crew.security import redact
+
+    return redact("\n".join(lines))[-_BUILD_LOG_TAIL_CHARS:]
+
+
+def _build_failed(log_path: Optional[Path], build_log: Optional[BinaryIO]) -> FrontendBuildResult:
+    """A ``failed`` result whose tail is read from the still-open *build_log*."""
+    return FrontendBuildResult("failed", log_path, _build_log_tail(build_log))
+
+
 @contextlib.contextmanager
 def _staging_lock(static_parent: Path, timeout: Optional[float] = None) -> Iterator[None]:
     """Hold the cross-process staging lock for ``static/dist``.
@@ -491,8 +640,11 @@ def _npm_build_and_stage_locked(
     proj_path: Path,
     npm: str,
     log: Callable[[str], None],
+    build_log: Optional[BinaryIO] = None,
 ) -> bool:
     """Run ``npm run build`` then stage it. Caller holds the staging lock.
+
+    The build's output goes to ``build_log`` when given, else it is discarded.
 
     The build is spawned in its own process group and the whole tree is reaped
     on timeout. ``npm run build`` (website/package.json) runs several processes,
@@ -513,16 +665,16 @@ def _npm_build_and_stage_locked(
     if not _publishes_atomically(built_dist) and _links_to(static_dist, built_dist):
         _stage_dist_locked(built_dist, static_dist, log)
     before = _index_identity(built_dist)
+    _log_step(build_log, ["run", "build"])
     proc = subprocess.Popen(
         [npm, "run", "build"],
         env=_edition_build_env(),
         cwd=str(website_dir),
-        # DEVNULL, not PIPE: nothing reads the build's output, and pipes would
-        # make the post-kill drain block until every grandchild closes its
-        # inherited write handle — inside the lock holder, which would then
-        # never release it.
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        # A file or DEVNULL, never PIPE: a pipe would make the post-kill drain
+        # block until every grandchild closes its inherited write handle —
+        # inside the lock holder, which would then never release it.
+        stdout=build_log if build_log is not None else subprocess.DEVNULL,
+        stderr=subprocess.STDOUT if build_log is not None else subprocess.DEVNULL,
         start_new_session=platform_compat.IS_POSIX,
         creationflags=platform_compat.CREATE_NEW_PROCESS_GROUP,
     )
@@ -1051,7 +1203,7 @@ def stage_built_dist(
 def build_frontend_sync(
     proj_path: Path,
     log: Callable[[str], None] = _print_safe,
-) -> None:
+) -> FrontendBuildResult:
     """Build the in-tree ``website/`` frontend and stage it (synchronous).
 
     Runs ``npm ci`` (falling back to ``npm install`` when there is no
@@ -1063,20 +1215,23 @@ def build_frontend_sync(
     The edition seam is threaded through the build (see
     :func:`_edition_build_env`), so a downstream edition's rebuild recomposes THAT
     edition rather than staging a stock bundle over it.
+
+    Returns a :class:`FrontendBuildResult`; the install and build output is
+    written to ``<data home>/logs/frontend-build.log``, which it names.
     """
     website_dir = proj_path / _DIR_NAME
     if not website_dir.is_dir():
         log("  ⚠️  No website/ directory — skipping frontend build")
-        return
+        return _SKIPPED
     # Resolve to a full path: on Windows npm is ``npm.CMD``, which PATHEXT-aware
     # shutil.which finds but CreateProcess cannot spawn by the bare name "npm".
     npm = shutil.which("npm")
     if not npm:
         log("  ⚠️  npm not found — skipping frontend build")
-        return
+        return _SKIPPED
     if edition_sources_missing():
         log("  ⚠️  Edition frontend sources not present — keeping the shipped dashboard")
-        return
+        return _SKIPPED
 
     log("  🔨 Building frontend (npm)…")
     install_args = (
@@ -1131,10 +1286,16 @@ def build_frontend_sync(
             proc.communicate(timeout=_REAP_TIMEOUT)
 
     proc = None
+    build_log: Optional[BinaryIO] = None
+    log_path: Optional[Path] = None
     try:
         with _staging_lock(proj_path / "src" / "kiro_crew" / "static"):
+            # Opened inside the lock: the open truncates, and a peer waiting for
+            # the lock must not empty the log the holder is still writing.
+            build_log, log_path = _open_build_log()
             if not backup.begin():
-                return
+                return _build_failed(log_path, build_log)
+            _log_step(build_log, install_args)
             try:
                 try:
                     # Popen rather than subprocess.run: run() never exposes the
@@ -1147,15 +1308,15 @@ def build_frontend_sync(
                     proc = subprocess.Popen(
                         [npm, *install_args],
                         cwd=str(website_dir),
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
+                        stdout=build_log if build_log is not None else subprocess.PIPE,
+                        stderr=subprocess.STDOUT if build_log is not None else subprocess.PIPE,
                         start_new_session=platform_compat.IS_POSIX,
                         creationflags=platform_compat.CREATE_NEW_PROCESS_GROUP,
                     )
                 except OSError as exc:
                     backup.rollback()
                     log(f"  ⚠️  Frontend npm install could not start ({exc}) — tree left as it was")
-                    return
+                    return _build_failed(log_path, build_log)
                 try:
                     proc.communicate(timeout=_INSTALL_TIMEOUT)
                 except subprocess.TimeoutExpired:
@@ -1168,11 +1329,11 @@ def build_frontend_sync(
                         f"  ⚠️  Frontend npm install timed out after {_INSTALL_TIMEOUT}s"
                         " — the dependency tree was left as it was"
                     )
-                    return
+                    return _build_failed(log_path, build_log)
                 if proc.returncode != 0:
                     backup.rollback()
                     log("  ⚠️  Frontend npm install failed — the dependency tree was left as it was")
-                    return
+                    return _build_failed(log_path, build_log)
                 backup.commit()
             except BaseException:
                 # Ctrl-C is the case this exists for: KeyboardInterrupt is a
@@ -1192,15 +1353,22 @@ def build_frontend_sync(
                 _reap_tree(proc)
                 backup.rollback()
                 raise
-            _npm_build_and_stage_locked(website_dir, proj_path, npm, log)
+            if _npm_build_and_stage_locked(website_dir, proj_path, npm, log, build_log):
+                return FrontendBuildResult("built", log_path)
+            return _build_failed(log_path, build_log)
     except OSError as exc:
         log(f"  ⚠️  Could not acquire the static/dist staging lock: {exc}")
+        return _build_failed(log_path, build_log)
+    finally:
+        if build_log is not None:
+            with contextlib.suppress(OSError):
+                build_log.close()
 
 
 async def build_frontend_async(
     proj: str,
     push_progress: Optional[Callable[[str, str], None]] = None,
-) -> None:
+) -> FrontendBuildResult:
     """Build the in-tree ``website/`` frontend and stage it (async).
 
     Async sibling of :func:`build_frontend_sync`: runs ``npm ci`` (fallback
@@ -1213,6 +1381,9 @@ async def build_frontend_async(
     Threads the edition seam like the sync helper — this is the path
     ``POST /api/update`` and the gateway auto-apply take, so an edition install
     must not silently rebuild as stock here either.
+
+    Returns a :class:`FrontendBuildResult` like the sync helper, with the
+    install and build output in the same log file.
     """
     proj_path = Path(proj)
     website_dir = proj_path / _DIR_NAME
@@ -1223,16 +1394,16 @@ async def build_frontend_async(
 
     if not await asyncio.to_thread(website_dir.is_dir):
         _warn("No website/ directory -- skipping frontend build")
-        return
+        return _SKIPPED
     # Resolve to a full path: on Windows npm is ``npm.CMD``, which PATHEXT-aware
     # shutil.which finds but CreateProcess cannot spawn by the bare name "npm".
     npm = shutil.which("npm")
     if not npm:
         _warn("npm not found -- skipping frontend build")
-        return
+        return _SKIPPED
     if edition_sources_missing():
         _warn("Edition frontend sources not present -- keeping the shipped dashboard")
-        return
+        return _SKIPPED
 
     install_args = (
         ["ci", "--no-audit", "--no-fund"]
@@ -1320,20 +1491,29 @@ async def build_frontend_async(
         await _offload(lambda: lock.enter_context(_staging_lock(static_parent)))
     except OSError as exc:
         _warn(f"Could not acquire the static/dist staging lock: {exc}")
-        return
+        return _build_failed(None, None)
+    # Opened inline, not offloaded: a mkdir and an open of one small file, and an
+    # await here would let a cancellation land between taking the lock and the
+    # `try` whose `finally` releases it.
+    build_log, log_path = _open_build_log()
     try:
         # begin() is INSIDE the protected interval: it arms the transaction in a
         # worker thread, so a cancellation delivered just after the rename but
         # before the body would otherwise leave the tree stashed with nothing to
         # put it back.
         if not await _offload(backup.begin):
-            return
+            return _build_failed(log_path, build_log)
+        _log_step(build_log, install_args)
         try:
             npm_i = await asyncio.create_subprocess_exec(
                 npm, *install_args,
                 cwd=str(website_dir),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stdout=build_log if build_log is not None else asyncio.subprocess.DEVNULL,
+                stderr=(
+                    asyncio.subprocess.STDOUT
+                    if build_log is not None
+                    else asyncio.subprocess.DEVNULL
+                ),
                 # Its own group, so the whole install tree can be signalled --
                 # see _kill_and_wait. No-op on the platform that lacks each half.
                 start_new_session=platform_compat.IS_POSIX,
@@ -1342,7 +1522,7 @@ async def build_frontend_async(
         except OSError as exc:
             await _offload(backup.rollback)
             _warn(f"Frontend npm install could not start ({exc}) -- tree left as it was")
-            return
+            return _build_failed(log_path, build_log)
         try:
             await asyncio.wait_for(npm_i.wait(), timeout=_INSTALL_TIMEOUT)
         except asyncio.TimeoutError:
@@ -1354,11 +1534,11 @@ async def build_frontend_async(
                 f"Frontend npm install timed out after {_INSTALL_TIMEOUT}s"
                 " -- the dependency tree was left as it was"
             )
-            return
+            return _build_failed(log_path, build_log)
         if npm_i.returncode != 0:
             await _offload(backup.rollback)
             _warn("Frontend npm install failed -- the dependency tree was left as it was")
-            return
+            return _build_failed(log_path, build_log)
         await _offload(backup.commit)
 
         # Still inside the SAME holder, so this calls the _locked variant --
@@ -1378,7 +1558,7 @@ async def build_frontend_async(
             # warns and returns, it does not raise for a failed build.
             try:
                 return _npm_build_and_stage_locked(
-                    website_dir, proj_path, npm, messages.append
+                    website_dir, proj_path, npm, messages.append, build_log
                 )
             except OSError as exc:
                 messages.append(f"Frontend build could not run: {exc}")
@@ -1437,6 +1617,11 @@ async def build_frontend_async(
         # the tree work -- so doing it inline is safe even on the cancelled path.
         with contextlib.suppress(Exception):
             lock.close()
+        # Read before closing: the tail comes from this descriptor, not the name.
+        final_tail = "" if staged else _build_log_tail(build_log)
+        if build_log is not None:
+            with contextlib.suppress(OSError):
+                build_log.close()
 
     for message in messages:
         # Surface the specific cause (build timeout / build failure / staging
@@ -1446,6 +1631,9 @@ async def build_frontend_async(
         _warn(message.strip().lstrip("⚠️ ").strip() or "Frontend build/staging failed")
     if not staged and not messages:
         _warn("Frontend build/staging failed -- dashboard may be stale")
+    if staged:
+        return FrontendBuildResult("built", log_path)
+    return FrontendBuildResult("failed", log_path, final_tail)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
