@@ -172,7 +172,10 @@ async function runOnce(browser, base, name) {
   // Frames land in the store batched per animation frame, and the action that
   // carries them is an implementation detail, so check for any dispatch here and
   // let the store-state checks below prove the frames arrived.
-  if (scen.streaming.length && !perf.dispatches) throw new Error(`no dispatches for ${frames} frames: the frames did not reach the store`)
+  if (scen.streaming.length && !perf.dispatches) throw new Error(`no dispatches for ${frames} frames: the frames did not reach the store, or store/index.ts no longer installs window.__kcPerfMw`)
+  // Every scenario renders the sidebar, which reads the store, so zero selector
+  // calls means store/index.ts no longer wraps useAppSelector with __kcSelWrap.
+  if (!perf.selectorCalls) throw new Error('no useAppSelector calls counted: store/index.ts no longer applies window.__kcSelWrap')
   if (scen.prose && streamChars < TICKS * 30) throw new Error(`the streamed answer reached only ${streamChars} chars`)
   if (!scen.prose && scen.streaming.length && perf.slotMessagesRows === 0) throw new Error('no background rows reached chat.slotMessages')
   return { scenario: name, loaded, frames, scriptMs, streamChars, ...perf }
@@ -220,13 +223,17 @@ if (args.check) {
   for (const [name, r] of Object.entries(results)) {
     const b = budgets.scenarios?.[name]
     if (!b) continue
+    // Counters listed in `report` vary between runs by more than the tolerance,
+    // so they are printed but never fail the check.
+    const reportOnly = new Set(b.report ?? [])
     for (const k of GATED) {
       if (b[k] == null) continue
       const limit = Math.floor(b[k] * (1 + tol))
       const v = r.median[k]
       const tag = v > limit ? 'OVER' : v < b[k] * (1 - tol) ? 'under (lower the budget)' : 'ok'
-      console.log(`${name}.${k}: ${v} against budget ${b[k]} (limit ${limit}) ${tag}`)
-      if (v > limit) over.push(`${name}.${k}`)
+      const gated = !reportOnly.has(k)
+      console.log(`${name}.${k}: ${v} against budget ${b[k]} (limit ${limit}) ${tag}${gated ? '' : ' (report only)'}`)
+      if (gated && v > limit) over.push(`${name}.${k}`)
     }
   }
   if (over.length) {

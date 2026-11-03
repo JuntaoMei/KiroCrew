@@ -530,7 +530,15 @@ def test_ci_blocking_scans_are_covered_by_the_floor():
     )
 
     npm_invoked = set(re.findall(r"\bnpm run ([a-z0-9:-]+)", run_text))
-    npm_missing = sorted(n for n in npm_invoked if f"run {n}" not in floor)
+    exempt_npm_scripts = {
+        # The advisory Render Benchmark job (not a required check): a profiling
+        # build plus four 30 s browser scenarios, about 9 minutes. Its commit
+        # counts depend on the pinned runner the budgets were measured on, so a
+        # local run is not the CI verdict. website/docs/testing.md says how to
+        # run it by hand.
+        "bench:render",
+    }
+    npm_missing = sorted(n for n in npm_invoked - exempt_npm_scripts if f"run {n}" not in floor)
     assert not npm_missing, f"ci.yml runs these npm scripts but the floor does not: {npm_missing}"
 
     # A blocking step can also be a bare binary -- `cfn-lint`, `mypy`, `flake8`
