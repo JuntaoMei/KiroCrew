@@ -138,4 +138,32 @@ describe('MeetingWorkspace transcript layout', () => {
     await waitFor(() => expect(screen.queryByTestId('meeting-agent-panels')).toBeNull())
     expect(screen.getByTestId('meeting-transcript-slot').className).toContain('flex-1')
   })
+
+  it('hides the transcript while a panel is expanded, and keeps it mounted (#21179)', () => {
+    const { rerender } = render(
+      <MeetingWorkspace
+        hasAgentPanels
+        expanded
+        agentPanels={<div>Agent notes</div>}
+        transcript={<div>Transcript content</div>}
+      />,
+    )
+
+    expect(screen.getByTestId('meeting-workspace').dataset.transcriptLayout).toBe('hidden')
+    const slot = screen.getByTestId('meeting-transcript-slot')
+    expect(slot.className).toBe('hidden')
+    // Hidden, not unmounted: the follow-scroll position must survive the restore.
+    expect(screen.getByText('Transcript content')).toBeTruthy()
+
+    rerender(
+      <MeetingWorkspace
+        hasAgentPanels
+        expanded={false}
+        agentPanels={<div>Agent notes</div>}
+        transcript={<div>Transcript content</div>}
+      />,
+    )
+    expect(screen.getByTestId('meeting-workspace').dataset.transcriptLayout).toBe('split')
+    expect(screen.getByTestId('meeting-transcript-slot').className).toContain('lg:w-[360px]')
+  })
 })

@@ -24,6 +24,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
+import { useState } from 'react'
 
 import AgentPanel from '../apps/meetings/components/AgentPanel'
 import type { AgentDef } from '../apps/meetings/api'
@@ -445,13 +446,14 @@ describe('AgentPanel — editable minutes', () => {
     expect(screen.getByText(EDITABLE.edited)).toBeTruthy()
   })
 
-  it('keeps the header to two actions and labels the separate edit action row', () => {
-    const { container } = mountEditable({ edit: { stale: false } })
+  it('keeps the edit actions out of the header, in their own labelled row', () => {
+    const { container } = mountEditable({ edit: { stale: false }, onToggleExpanded: vi.fn() })
     const card = container.firstElementChild as HTMLElement
     const header = card.children[0] as HTMLElement
     const editActions = card.children[1] as HTMLElement
 
-    expect(within(header).getAllByRole('button')).toHaveLength(2)
+    // Expand, output/chat toggle, mute: view controls only.
+    expect(within(header).getAllByRole('button')).toHaveLength(3)
     const actionButtons = within(editActions).getAllByRole('button')
     expect(actionButtons).toHaveLength(2)
     expect(actionButtons.map(button => button.textContent)).toEqual([
@@ -640,5 +642,139 @@ describe('AgentPanel — markdown output pane scrolling (#7664)', () => {
       expect(el.classList.contains('overflow-hidden')).toBe(false)
       expect(el.classList.contains('card-glow')).toBe(false)
     }
+  })
+})
+
+// ── expand (#21179) ─────────────────────────────────────────────────────────
+//
+// A large diagram or table could not be seen whole: the sketch frame was a fixed
+// 340 px and the notes pane capped at 520 px. The header's Expand control lets
+// the panel take the workspace; the compact layout stays the default, and the
+// same control or Escape restores it with focus back on the control.
+
+function ExpandHarness({
+  agent,
+  output,
+  ...rest
+}: { agent: AgentDef; output: string } & Partial<React.ComponentProps<typeof AgentPanel>>) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <AgentPanel
+      agent={agent}
+      output={output}
+      listening
+      chatView={false}
+      onToggleListening={vi.fn()}
+      onToggleChatView={vi.fn()}
+      onSendMessage={vi.fn()}
+      expanded={expanded}
+      onToggleExpanded={() => setExpanded(value => !value)}
+      {...rest}
+    />
+  )
+}
+
+describe('AgentPanel — expand (#21179)', () => {
+  it('is compact by default: the sketch frame keeps its fixed 340px box', () => {
+    const { container } = render(<ExpandHarness agent={HTML} output="<p>diagram</p>" />)
+    const frame = container.querySelector('iframe') as HTMLIFrameElement
+    expect(frame.style.height).toBe('340px')
+    expect(screen.getByLabelText('Expand Sketch Artist')).toBeTruthy()
+    expect((container.firstElementChild as HTMLElement).className).not.toContain('h-full')
+  })
+
+  it('lets the sketch frame grow to the card height while expanded, then restores it', () => {
+    const { container } = render(<ExpandHarness agent={HTML} output="<p>diagram</p>" />)
+    fireEvent.click(screen.getByLabelText('Expand Sketch Artist'))
+
+    const card = container.firstElementChild as HTMLElement
+    const frame = container.querySelector('iframe') as HTMLIFrameElement
+    expect(card.className).toContain('h-full')
+    expect(frame.style.height).toBe('')
+    expect(frame.className).toContain('flex-1')
+    // The floor and the compositing promotion both survive the expansion.
+    expect(frame.style.minHeight).toBe('340px')
+    expect(frame.style.transform).toBe('translateZ(0)')
+
+    const restore = screen.getByLabelText(EDITABLE.collapse.replace('{{name}}', 'Sketch Artist'))
+    fireEvent.click(restore)
+    expect(frame.style.height).toBe('340px')
+    expect(card.className).not.toContain('h-full')
+  })
+
+  it('drops the notes pane height cap while expanded', () => {
+    render(<ExpandHarness agent={MARKDOWN} output="# Notes" />)
+    const pane = screen.getByTestId('agent-output-pane')
+    expect(pane.className).toContain('max-h-[min(520px,60vh)]')
+
+    fireEvent.click(screen.getByLabelText('Expand Note Taker'))
+    expect(pane.className).not.toContain('max-h-')
+    expect(pane.className).toContain('flex-1')
+  })
+
+  it('restores on Escape and returns focus to the expand control', () => {
+    render(<ExpandHarness agent={MARKDOWN} output="# Notes" />)
+    const button = screen.getByLabelText('Expand Note Taker')
+    fireEvent.click(button)
+    expect(screen.getByTestId('agent-output-pane').className).toContain('flex-1')
+
+    // Focus elsewhere first, so the restore has to move it back.
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(screen.getByTestId('agent-output-pane').className).toContain('max-h-')
+    expect(document.activeElement).toBe(screen.getByLabelText('Expand Note Taker'))
+  })
+
+  it('leaves an Escape inside a dialog to the dialog', () => {
+    render(
+      <>
+        <ExpandHarness agent={MARKDOWN} output="# Notes" />
+        <div role="dialog">
+          <button>inside</button>
+        </div>
+      </>,
+    )
+    fireEvent.click(screen.getByLabelText('Expand Note Taker'))
+    fireEvent.keyDown(screen.getByText('inside'), { key: 'Escape' })
+    expect(screen.getByTestId('agent-output-pane').className).toContain('flex-1')
+  })
+
+  it('answers no Escape while compact', () => {
+    const onToggleExpanded = vi.fn()
+    mount(MARKDOWN, { output: '# Notes', onToggleExpanded })
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onToggleExpanded).not.toHaveBeenCalled()
+  })
+
+  it('offers no expand control without the callback, or for a chat agent', () => {
+    mount(MARKDOWN, { output: '# Notes' })
+    expect(screen.queryByLabelText('Expand Note Taker')).toBeNull()
+    cleanup()
+    mount(CHAT, { onToggleExpanded: vi.fn() })
+    expect(screen.queryByLabelText('Expand Helper')).toBeNull()
+  })
+
+  it('a hidden sibling stays mounted, so its open draft survives', () => {
+    const { container, rerender, props } = mountEditable()
+    fireEvent.click(screen.getByLabelText(EDITABLE.edit))
+    fireEvent.change(screen.getByLabelText('Note Taker output, editable'), {
+      target: { value: 'unsaved line' },
+    })
+    rerender(<AgentPanel {...props} hidden />)
+    expect((container.firstElementChild as HTMLElement).className).toContain('hidden')
+    rerender(<AgentPanel {...props} hidden={false} />)
+    expect(
+      (screen.getByLabelText('Note Taker output, editable') as HTMLTextAreaElement).value,
+    ).toBe('unsaved line')
+  })
+})
+
+describe('expand — wiring', () => {
+  it('the view passes the expand state to the panels and the workspace', () => {
+    expect(ViewSource).toContain('onToggleExpanded={')
+    expect(ViewSource).toContain('expanded={expandedId !== null}')
+    // Siblings are hidden, never filtered out of the map (which would unmount a draft).
+    expect(ViewSource).toContain('hidden={expandedId !== null && expandedId !== agent.id}')
   })
 })

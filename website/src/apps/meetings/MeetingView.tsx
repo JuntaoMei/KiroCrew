@@ -74,6 +74,10 @@ export default function MeetingView({
     else setSidebarOpen(false)
   }
   const [attachMenuOpen, setAttachMenuOpen] = useState(false)
+  // The one agent panel enlarged to fill the workspace, or null for the compact
+  // split layout (the default). View state only: nothing is sent to the server
+  // and the agents and transcription keep running underneath.
+  const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null)
 
   const {
     meta,
@@ -107,6 +111,12 @@ export default function MeetingView({
     translation,
     note,
   } = session
+
+  // An expanded agent that is then disabled drops out of the roster; the
+  // workspace falls back to the compact layout rather than hiding everything.
+  const expandedId = enabledAgents.some(agent => agent.id === expandedAgentId)
+    ? expandedAgentId
+    : null
 
   if (loading) return <Skeleton className="h-40 m-6" />
 
@@ -405,12 +415,26 @@ export default function MeetingView({
 
         <MeetingWorkspace
           hasAgentPanels={enabledAgents.length > 0}
+          expanded={expandedId !== null}
           agentPanels={(
-            <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
+            <div
+              className={
+                expandedId !== null
+                  ? 'grid grid-cols-1 h-full'
+                  : 'grid grid-cols-1 2xl:grid-cols-2 gap-3'
+              }
+            >
               {enabledAgents.map(agent => (
                 <AgentPanel
                   key={agent.id}
                   agent={agent}
+                  expanded={expandedId === agent.id}
+                  // The other panels stay MOUNTED, only hidden: one of them can
+                  // hold an unsaved minutes draft, which unmounting would drop.
+                  hidden={expandedId !== null && expandedId !== agent.id}
+                  onToggleExpanded={() =>
+                    setExpandedAgentId(current => (current === agent.id ? null : agent.id))
+                  }
                   output={outputs[agent.id] ?? ''}
                   listening={!mutedAgents.includes(agent.id)}
                   chatView={chatViewAgents.includes(agent.id)}
