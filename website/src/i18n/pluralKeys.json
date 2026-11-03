@@ -457,5 +457,7 @@
   "apps.codeReviewSage.components.runDetail.more_count",
   "apps.codeReviewSage.components.runProgress.reviewed_of",
   "apps.codeReviewSage.components.runProgress.failed_count",
-  "apps.codeReviewSage.components.runProgress.cancelled_count"
+  "apps.codeReviewSage.components.runProgress.cancelled_count",
+  "pages.settings.instancesPanel.warm_cap_count",
+  "pages.settings.postureDisclosure.show_more_count"
 ]
