@@ -23,6 +23,7 @@ can use the ACP attempt as its authority.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import cast
@@ -51,6 +52,16 @@ def _reset_refusal_warning():
     kiro_readiness._clear_refusal_warning()
     yield
     kiro_readiness._clear_refusal_warning()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_catalog_cache(_floor_monkeypatch: pytest.MonkeyPatch):
+    """Start every test with no cached catalog.
+
+    A cached catalog is served without the gate, so a list left warm by an
+    earlier test would turn a signed-out 503 here into a 200 on test ORDER.
+    """
+    _floor_monkeypatch.setattr(agents, "_catalog_cache", agents._CatalogCache())
 
 
 class _SignedOutKiroPrerequisiteService(KiroPrerequisiteService):
@@ -566,3 +577,82 @@ async def test_destructive_rerun_gate_still_reprobes_a_stale_latch() -> None:
 async def test_poll_gate_max_age_is_longer_than_the_poll_interval() -> None:
     """The constant ``/api/sessions/usage`` reads must exceed its 30 s poll cadence."""
     assert kiro_readiness._POLL_GATE_MAX_AGE_SECS > 30.0
+
+
+_CACHED_ROWS = [{"model_name": "claude-sonnet-4.5", "description": "cached"}]
+
+
+def _warm_catalog(*, age_secs: float) -> None:
+    """Seed the module catalog cache with a list fetched *age_secs* ago."""
+
+    agents._catalog_cache.models = list(_CACHED_ROWS)
+    agents._catalog_cache.fetched_at = agents.time.monotonic() - age_secs
+
+
+@pytest.mark.asyncio
+async def test_api_models_serves_a_fresh_cache_without_the_sign_in_probe() -> None:
+    """A cached list spawns nothing, so it must not pay the 5-spawn re-probe.
+
+    The latch is a minute old, past the 30 s bound: before the fix the gate ran
+    ``_probe`` inline on this call even though the catalog was cached.
+    """
+    clock = _Clock()
+    service = _probed_ready_service(clock)
+    clock.advance(60.0)
+    _warm_catalog(age_secs=0.0)
+
+    with patch.object(service, "_probe", AsyncMock()) as probe:
+        with patch.object(agents, "_entitled_kiro_models", AsyncMock(side_effect=lambda _r, m: m)):
+            with patch.object(agents, "_fetch_kiro_catalog", AsyncMock()) as fetch:
+                resp = await agents.api_models(_request(service))
+
+    probe.assert_not_awaited()
+    fetch.assert_not_called()
+    assert resp.status == 200
+    assert json.loads(cast(bytes, resp.body)) == _CACHED_ROWS
+
+
+@pytest.mark.asyncio
+async def test_api_models_stale_cache_refresh_is_still_gated_before_its_spawn() -> None:
+    """A signed-out gateway gets its cached list, and the refresh never spawns.
+
+    The gate moved from the request into the refresh task; it must still run
+    before ``_fetch_kiro_catalog`` (which resolves and spawns kiro-cli), and a
+    refused gate must leave the cached list in place.
+    """
+    _warm_catalog(age_secs=agents._LIST_MODELS_CATALOG_TTL_SECS + 1.0)
+    request = _request(_make_signed_out_kiro_prerequisite())
+
+    with patch.object(agents, "_entitled_kiro_models", AsyncMock(side_effect=lambda _r, m: m)):
+        with patch.object(agents, "_fetch_kiro_catalog", AsyncMock()) as fetch:
+            resp = await agents.api_models(request)
+            task = agents._catalog_cache.task
+            assert task is not None
+            await asyncio.gather(task, return_exceptions=True)
+
+    fetch.assert_not_called()
+    assert resp.status == 200
+    assert json.loads(cast(bytes, resp.body)) == _CACHED_ROWS
+    assert agents._catalog_cache.models == _CACHED_ROWS
+    # Nothing spawned, so no backoff entry holds back the next refresh.
+    assert agents._catalog_cache.recent_failure() is None
+
+
+@pytest.mark.asyncio
+async def test_api_models_stale_cache_refresh_spawns_when_signed_in() -> None:
+    """A verified gateway's stale-cache refresh still reaches the spawn."""
+    _warm_catalog(age_secs=agents._LIST_MODELS_CATALOG_TTL_SECS + 1.0)
+    request = _request(_make_ready_kiro_prerequisite())
+    fresh = [{"model_name": "claude-opus-4.5", "description": "fresh"}]
+
+    with patch.object(agents, "_entitled_kiro_models", AsyncMock(side_effect=lambda _r, m: m)):
+        with patch.object(agents, "_fetch_kiro_catalog", AsyncMock(return_value=fresh)) as fetch:
+            resp = await agents.api_models(request)
+            task = agents._catalog_cache.task
+            assert task is not None
+            await task
+
+    fetch.assert_awaited_once()
+    # The reply was the cached list; the refresh landed behind it.
+    assert json.loads(cast(bytes, resp.body)) == _CACHED_ROWS
+    assert agents._catalog_cache.models == fresh

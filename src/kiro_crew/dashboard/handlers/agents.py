@@ -1323,12 +1323,13 @@ async def _fetch_kiro_catalog() -> list[dict]:
     return [wire_row(m) for m in models if not is_deprecated_model(m.get("model_name", ""))]
 
 
-def _shared_catalog_fetch() -> "asyncio.Task[list[dict]]":
+def _shared_catalog_fetch(gate_req: web.Request | None = None) -> "asyncio.Task[list[dict]]":
     """Return the in-flight catalog fetch, starting one if none is running.
 
     Single-flight: concurrent polls share one spawn. The task caches its result
     (and clears itself) when it finishes, so the next poll after a slow success
     is served straight from the cache rather than starting another cold start.
+    A *gate_req* runs the sign-in gate right before the spawn (see api_models).
     """
     existing = _catalog_cache.task
     if existing is not None and not existing.done():
@@ -1336,6 +1337,12 @@ def _shared_catalog_fetch() -> "asyncio.Task[list[dict]]":
 
     async def _run() -> list[dict]:
         try:
+            if gate_req is not None and await reject_if_kiro_unverified(gate_req) is not None:
+                raise _CatalogUnavailable(  # nothing spawned, so no backoff entry
+                    "kiro sign-in not verified; catalog refresh skipped",
+                    backoff=False,
+                    code=KIRO_PREREQUISITE_REQUIRED_CODE,
+                )
             models = await _fetch_kiro_catalog()
         except _CatalogUnavailable as exc:
             # Remember a failed spawn so the polls inside the backoff window
@@ -1421,25 +1428,15 @@ async def api_models(request: web.Request) -> web.Response:
     # backend, which is why it is not a capability-set branch like the one above.
     if bundle_route:
         return await api_models_kas_bundle(request)
-    # Signed-out gateways must never reach the spawn below. kiro-cli auto-opens
-    # an interactive browser login for ANY subcommand run unauthenticated
-    # (--no-interactive does not suppress it, and there is no opt-out env var),
-    # and the frontend polls this endpoint every 8s while the model list is
-    # degraded — which is exactly the signed-out state. Ungated, that pairing
-    # opened a browser window every 8s indefinitely. The 503 is the same
-    # degraded response the timeout/unresolved branches already return, so the
-    # client contract is unchanged; only the subprocess is skipped.
-    #
-    # Keep the tight destructive bound here: this endpoint polls only while the
-    # model list is a degraded fallback and stops the instant a live fetch wins
-    # (website/src/providers/modelListHealth.ts), so it is not polled at all when
-    # healthy and gains no latency from a wider window. Its only server-side
-    # cooldown is the short failure backoff below, so a wide stale-authorize window
-    # would still let a stale ready=True latch spawn a browser-opening login on
-    # most degraded ticks.
-    blocked = await reject_if_kiro_unverified(request)
-    if blocked is not None:
-        return blocked
+    # kiro-cli opens a browser login for ANY subcommand run signed out, and the
+    # frontend polls here every 8s while degraded, so no spawn below may run unless
+    # reject_if_kiro_unverified passes (tight 30 s bound: the only server-side
+    # cooldown is the short failure backoff). The gate guards the SPAWN, so it runs
+    # only where one can follow: inline on a cold miss, and in the background
+    # refresh right before it spawns. A cached list skips it: its re-probe is 5
+    # serial kiro-cli runs, paid on most page loads for no spawn. Accepted
+    # trade-off: after a sign-out the cached list shows until a turn or refresh
+    # notices.
     try:
         cached = _catalog_cache.models
         if cached is not None:
@@ -1450,10 +1447,13 @@ async def api_models(request: web.Request) -> web.Response:
             # A refresh that just failed is not retried until its backoff ends.
             stale = time.monotonic() - _catalog_cache.fetched_at >= _LIST_MODELS_CATALOG_TTL_SECS
             if stale and _catalog_cache.recent_failure() is None:
-                _shared_catalog_fetch()
+                _shared_catalog_fetch(gate_req=request)
             models = await _entitled_kiro_models(request, list(cached))
             return web.json_response(models)
 
+        blocked = await reject_if_kiro_unverified(request)
+        if blocked is not None:
+            return blocked
         # No catalog yet. Join (or start) the one shared background fetch and wait
         # at most the per-request bound for it — the SAME 10s a request waited
         # before. On timeout we answer the same degraded 503, but the fetch is NOT
