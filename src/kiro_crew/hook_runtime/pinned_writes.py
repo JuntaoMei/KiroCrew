@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         is_sensitive_path,
         logger,
         platform_compat,
+        replace_with_retry,
         validate_file_path,
     )
 
@@ -451,8 +452,12 @@ def _pinned_replace(
         else:
             # os.replace, not os.rename: on Windows rename REFUSES an existing
             # destination, while replace overwrites it -- and does so atomically,
-            # which is the property that matters here.
-            os.replace(os.path.join(parent, tmp_name), path)
+            # which is the property that matters here. Through the retry: on
+            # Windows a reader holding the destination open fails the rename, and
+            # the same hold fails any other writer's rename onto this name. A
+            # concurrent save can only land in the one backoff step after the hold
+            # ends, not across the whole retry.
+            replace_with_retry(os.path.join(parent, tmp_name), path)
         created = False  # renamed away; nothing left to clean up
         return "ok"
     except OSError:
