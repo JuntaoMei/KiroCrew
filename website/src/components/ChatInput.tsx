@@ -262,6 +262,7 @@ function ChatInput({
   showContextTokens,
   isRunning = false,
   projectLocked = false,
+  projectSwitching = false,
   compacting = false,
   stopDeclined = false,
   onStop,
@@ -1959,8 +1960,15 @@ function ChatInput({
             disabled={projectLocked}
             title={projectLocked ? `${projectChipTitle}\n${i18nT('components.chatInput.project_locked_while_subagents_run')}` : isRunning ? `${projectChipTitle}\n${midTurnProjectNote}` : projectChipTitle}
             aria-label={projectLocked ? `${projectChipTitle}\n${i18nT('components.chatInput.project_locked_while_subagents_run')}` : isRunning ? `${projectChipTitle}\n${midTurnProjectNote}` : projectChipTitle}
+            /* A pick waits on the turn-preparation lock, which a cold spawn
+               holds for seconds: the spinner says the pick was taken, the
+               same signal as the memory-mode chip (#20351). */
+            aria-busy={projectSwitching || undefined}
+            data-testid="composer-project-chip"
           >
-            <FolderOpen size={13} className="shrink-0 opacity-70" />
+            {projectSwitching
+              ? <Loader2 size={13} className="shrink-0 animate-spin" aria-hidden="true" data-testid="composer-project-switching" />
+              : <FolderOpen size={13} className="shrink-0 opacity-70" />}
             {/* Budget favours the branch: the folder name is also in the tooltip
                 and the picker, whereas a clipped branch ("feat/pro…") is exactly
                 the ambiguity this label exists to remove. The enclosing shelf
@@ -1983,6 +1991,7 @@ function ChatInput({
             </>
           )}
           {!!project && <ProjectAwsProfileStatus project={project} shelfCompact={shelfCompact} />}
+          <span role="status" className="sr-only" data-testid="composer-project-switch-status">{projectSwitching ? i18nT('components.chatInput.switching_project') : ''}</span>
           </div>
           )}
           </div>
