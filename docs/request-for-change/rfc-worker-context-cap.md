@@ -24,6 +24,25 @@ superseded-by: []
   trim and its holds, and changes three things for workers: which sessions are
   in scope, the marks, and the seed.
 - Tracking issue: [#23037](https://github.com/kirodotdev/KiroCrew/issues/23037).
+- **Amended 2026-11-03 (owner ruling): a warm cache is never trimmed**, for
+  workers and conductors alike. What is built differs from sections 4-5 below
+  in four ways, and those sections are otherwise kept as the record:
+  - No safety line (Rule A at 600K): a worker is trimmed only at a turn start
+    whose previous turn ended 300 s or more ago. A warm worker keeps its
+    session at any size, until its cache expires or KAS compacts at 80%.
+  - The cold line is **300K**, not 200K. On 2026-11-01..03 (2.77 days, 79
+    worker KAS sessions) an offline replay gives 17 trims (6.1 a day), 0 on a
+    warm cache, about 252 credits a day saved; the 2026-11-03 research
+    (`P-worker-trim-design`) put 200K at about 2.4 times the trims for
+    about 30% more saving.
+  - The switch is its own key, `session.worker_context_cap`, **default off**.
+    `session.context_cap` stays the conductor's switch.
+  - The seed is the conductor's: the trim note, the session-ledger snapshot
+    (empty for a worker), the tool-result pointer list and the text tail. The
+    note tells the model to re-read files and to fetch other tool output with
+    `get_chat_session(session_key, tool_call_id)`. The work brief, last report
+    and edited-file list of section 5.3 are not built; a worker re-reads its
+    item with `work_brief`, as its prompt already says.
 - Code read at `ba317c8f61`. Numbers come from one operator's host: 887
   dashboard turns of 42 dispatched-worker KAS sessions, 2026-10-17 to
   2026-10-21 (4.5 days), the R7 join of Kiro Crew's usage rows, the chat
@@ -186,8 +205,9 @@ R7 assumed 5.2 s. This RFC uses 5.3 s, and gives 8.6 s as the high case.
    the new session is append-only again from its first request.
 4. A cold trim (Rule B) happens only after the cache has expired: 300 s since
    the previous turn ended, so more than 300 s since its last request started.
-5. A warm trim happens only over the 600K safety line, where KAS's own
-   summarization at 800K is close, and it pays back on its first request.
+5. ~~A warm trim happens only over the 600K safety line, where KAS's own
+   summarization at 800K is close, and it pays back on its first request.~~
+   Amended 2026-11-03: there is no warm trim.
 
 ## 4. Mark sets compared
 
@@ -410,7 +430,14 @@ section 4 run against the implementation's own code.
   may need approval on a slot that asks before tools run.
 - **A wrong scope.** A worker chat's metadata can name another agent. Scoping
   on the work-ledger binding, not only the agent's name, keeps an unbound chat
-  out.
+  out. Amended 2026-11-03: the built check scopes on the slot's agent
+  (`kirocrew-worker`) only, behind a switch that is off by default; an unbound
+  chat running that agent is trimmed by the same cold-only rule.
+- **A warm worker past the line (added 2026-11-03).** With no safety line, a
+  worker whose turns keep arriving inside the cache life keeps growing until
+  its cache expires or KAS compacts at 80% of its window. In the 2026-11-01..03
+  replay no worker turn started over 400K on a warm cache; the largest worker
+  context under the cold-only rule was 431K, reached inside one turn.
 
 ## 10. Decisions needed and rollout
 
