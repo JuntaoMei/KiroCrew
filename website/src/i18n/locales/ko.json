@@ -8090,7 +8090,9 @@
       "show_paste_preview": "붙여넣기 미리보기 표시",
       "paste_lines_other": "[ 붙여넣기 #{{seq}} · {{count}}줄 ]",
       "preview_more_lines_other": "… {{count}}줄 더",
-      "preview_gesture_hint": "두 번 클릭하여 전체 텍스트 삽입 · Backspace로 붙여넣기 제거"
+      "preview_gesture_hint": "두 번 클릭하여 전체 텍스트 삽입 · Backspace로 붙여넣기 제거",
+      "expand_pasted_lines_other": "붙여넣은 {{count}}줄 펼치기",
+      "collapse_pasted_lines_other": "붙여넣은 {{count}}줄 접기"
     },
     "privacyChapter": {
       "continue": "계속",
@@ -10554,6 +10556,12 @@
       "grant_entry_copy": "{{title}}: 채팅 답변에서 선택한 텍스트(최대 {{max}}자)와 복사 버튼",
       "grant_entry_open": "{{title}}: 채팅 답변에서 선택한 텍스트(최대 {{max}}자)와 링크 열기 버튼",
       "grant_entry_copy_open": "{{title}}: 채팅 답변에서 선택한 텍스트(최대 {{max}}자)와 복사 및 열기 버튼"
+    },
+    "weekGrid": {
+      "job_at": "{{name}}, {{time}} {{tz}}",
+      "job_title": "{{name}} — {{time}} {{tz}}",
+      "job_title_paused": "{{name}} (일시 중지됨) — {{time}} {{tz}}",
+      "job_name_paused": "{{name}} (일시 중지됨)"
     }
   },
   "hooks": {
@@ -19388,7 +19396,8 @@
       "agents_active_other": "{{n}}개 활동 중",
       "slots_open_other": "빈 슬롯 {{n}}개",
       "summary": "{{present}} · {{active}} · {{open}}",
-      "scene_label": "장면"
+      "scene_label": "장면",
+      "scene_button": "{{label}} 장면: {{desc}}"
     },
     "worldsPopout": {
       "hide_controls": "컨트롤 숨기기",

@@ -8090,7 +8090,9 @@
       "show_paste_preview": "显示粘贴预览",
       "paste_lines_other": "[ 粘贴 #{{seq}} · {{count}} 行 ]",
       "preview_more_lines_other": "… 还有 {{count}} 行",
-      "preview_gesture_hint": "双击插入完整文本 · 按 Backspace 删除粘贴内容"
+      "preview_gesture_hint": "双击插入完整文本 · 按 Backspace 删除粘贴内容",
+      "expand_pasted_lines_other": "展开粘贴的 {{count}} 行",
+      "collapse_pasted_lines_other": "收起粘贴的 {{count}} 行"
     },
     "privacyChapter": {
       "continue": "继续",
@@ -10554,6 +10556,12 @@
       "grant_entry_copy": "{{title}}：你在聊天回复中选中的文本，最多 {{max}} 个字符，以及一个复制按钮",
       "grant_entry_open": "{{title}}：你在聊天回复中选中的文本，最多 {{max}} 个字符，以及一个打开链接的按钮",
       "grant_entry_copy_open": "{{title}}：你在聊天回复中选中的文本，最多 {{max}} 个字符，以及复制和打开按钮"
+    },
+    "weekGrid": {
+      "job_at": "{{name}}，{{time}} {{tz}}",
+      "job_title": "{{name}} — {{time}} {{tz}}",
+      "job_title_paused": "{{name}}（已暂停）— {{time}} {{tz}}",
+      "job_name_paused": "{{name}}（已暂停）"
     }
   },
   "hooks": {
@@ -19388,7 +19396,8 @@
       "agents_active_other": "{{n}} 个活动",
       "slots_open_other": "{{n}} 个空闲槽位",
       "summary": "{{present}}，{{active}}，{{open}}",
-      "scene_label": "场景"
+      "scene_label": "场景",
+      "scene_button": "{{label}} 场景：{{desc}}"
     },
     "worldsPopout": {
       "hide_controls": "隐藏控制项",

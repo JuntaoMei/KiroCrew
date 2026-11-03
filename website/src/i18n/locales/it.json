@@ -8458,7 +8458,13 @@
       "preview_more_lines_many": "… {{count}} altre righe",
       "preview_more_lines_one": "… {{count}} altra riga",
       "preview_more_lines_other": "… {{count}} altre righe",
-      "preview_gesture_hint": "Doppio clic per inserire il testo completo · Backspace rimuove l'incollato"
+      "preview_gesture_hint": "Doppio clic per inserire il testo completo · Backspace rimuove l'incollato",
+      "expand_pasted_lines_one": "Espandi {{count}} riga incollata",
+      "expand_pasted_lines_many": "Espandi {{count}} righe incollate",
+      "expand_pasted_lines_other": "Espandi {{count}} righe incollate",
+      "collapse_pasted_lines_one": "Comprimi {{count}} riga incollata",
+      "collapse_pasted_lines_many": "Comprimi {{count}} righe incollate",
+      "collapse_pasted_lines_other": "Comprimi {{count}} righe incollate"
     },
     "privacyChapter": {
       "continue": "Continua",
@@ -10988,6 +10994,12 @@
       "grant_entry_copy": "{{title}}: fino a {{max}} caratteri del testo che selezioni nelle risposte della chat, e un pulsante Copia",
       "grant_entry_open": "{{title}}: fino a {{max}} caratteri del testo che selezioni nelle risposte della chat, e un pulsante per aprire un link",
       "grant_entry_copy_open": "{{title}}: fino a {{max}} caratteri del testo che selezioni nelle risposte della chat, e i pulsanti Copia e Apri"
+    },
+    "weekGrid": {
+      "job_at": "{{name}} alle {{time}} {{tz}}",
+      "job_title": "{{name}} — {{time}} {{tz}}",
+      "job_title_paused": "{{name}} (in pausa) — {{time}} {{tz}}",
+      "job_name_paused": "{{name}} (in pausa)"
     }
   },
   "hooks": {
@@ -20256,7 +20268,8 @@
       "slots_open_many": "{{n}} slot liberi",
       "slots_open_other": "{{n}} slot liberi",
       "summary": "{{present}} · {{active}} · {{open}}",
-      "scene_label": "Scena"
+      "scene_label": "Scena",
+      "scene_button": "Scena {{label}}: {{desc}}"
     },
     "worldsPopout": {
       "hide_controls": "Nascondi i controlli",
