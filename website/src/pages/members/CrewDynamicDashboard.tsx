@@ -16,6 +16,7 @@ import { useLanguage } from '../../i18n/LanguageProvider'
 import { MEMBER_DASHBOARD_QUERY_PREFIX, SESSION_DASHBOARD_QUERY_PREFIX, subscribeDashboardFields } from '../../hooks/useWebSocket'
 import CrewDashboardEmpty from './CrewDashboardEmpty'
 import CrewDashboardBehindBand from './CrewDashboardBehindBand'
+import CrewDashboardDownload from './CrewDashboardDownload'
 import { CREW_DASHBOARD_SANDBOX } from '../../lib/crewDashboardSandbox'
 
 // The grant set lives in lib/crewDashboardSandbox.ts so the artifact viewer can
@@ -1221,8 +1222,21 @@ export default function CrewDynamicDashboard({ target, displayName, avatar, onAc
   }
 
   return (
-    <div className="relative h-full min-h-0 flex flex-col" data-testid="crew-dashboard-frame" data-preview={preview ? 'true' : undefined}>
+    <div className="group relative h-full min-h-0 flex flex-col" data-testid="crew-dashboard-frame" data-preview={preview ? 'true' : undefined}>
       {lockBadge}
+      {target.kind === 'member' && !preview && (
+        // The mate's live page only: a staged preview is not the page anyone keeps,
+        // and a session's page is not a mate's Dashboard. Floated over the page's
+        // top-right corner and shown on hover, so it takes no row of its own; a
+        // device with no hover and a keyboard focus both keep it visible.
+        <div className="absolute right-2 top-2 z-10 flex max-w-[80%] items-start justify-end gap-2" style={lockBadge ? { top: '2.25rem' } : undefined}>
+          <CrewDashboardDownload
+            name={displayName}
+            input={{ html: shown.html, themeVars, mode: theme, pageScripts: runsScript }}
+            buttonClassName="border border-border bg-bg-elevated shadow-sm opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+          />
+        </div>
+      )}
       {broken && (
         // The page on screen is the last one that parsed. Banded, never replaced: the
         // alternative is blanking a working page because a NEWER copy is broken.

@@ -223,6 +223,29 @@ internal-secret transport (the agent `artifact_*` tools, the CLI and app
 drivers) and app tokens within their manifest grant are not dashboard subjects
 and keep their own rules. Pinned by `test/test_artifacts_owner_gate.py`.
 
+### Downloading a mate's Dashboard
+
+The mate's live Dashboard tab carries a **Download as HTML** button
+(`CrewDashboardDownload.tsx`). A staged preview and a root session's
+side-panel Dashboard do not. The button asks first, every time, in a confirm
+dialog that says the file shows the page as it is now and that anyone it is
+sent to can read everything on it. The file is a snapshot and does not update.
+
+The file is built in the browser from the document the tab shows
+(`crewDashboardDownload.ts`): `buildSrcdoc` over the page the gateway
+composed, with the reader's live theme tokens and the frame's own CSP
+(`connect-src 'none'`, no CDN script origins). The gateway has no theme to
+read, so it is not asked to build one. The page's fonts and images are already
+`data:` URLs; the one thing the tab loads by URL is the same-origin Tailwind
+runtime, which is fetched once and inlined in place of its `<script src>`, with
+every casing of `</script` escaped. A page the tab shows without script is
+saved with `pageScripts: false`, so its script does not run in the file either.
+The frame's link bridge and gesture relays are left out; links open the
+ordinary way. A file over 10 MB, or a runtime that cannot be read, is refused
+with a notice and nothing is saved. The bytes go through `saveBlob`, so the
+in-app-browser hand-off below applies. Uploading the same file to Kiro Space is
+#28622.
+
 ### Artifact files
 
 ```
