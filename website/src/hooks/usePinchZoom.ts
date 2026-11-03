@@ -157,6 +157,21 @@ export function usePinchZoom({ targetRef, containRef, enabled = true, min, max, 
     return { x: Math.min(maxX, Math.max(-maxX, x)), y: Math.min(maxY, Math.max(-maxY, y)) }
   }, [targetRef])
 
+  /** Where the content's own centre sits on screen with no pan applied: the
+   *  point `translate(pan) scale(zoom)` scales about. It is the viewport centre
+   *  only while the overlay lays the content out edge to edge; an overlay padded
+   *  for the safe-area insets centres it in the padded area instead, and with an
+   *  uneven inset (one side, or a taller top than bottom) the two differ. Read
+   *  from the element's box, which the scale leaves centred and the translate
+   *  moves by `pan`. An element with no layout box falls back to the viewport
+   *  centre. */
+  const contentCentre = useCallback((): Point => {
+    const el = targetRef.current
+    const r = el?.getBoundingClientRect()
+    if (!r || (r.width === 0 && r.height === 0)) return { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+    return { x: r.left + r.width / 2 - panRef.current.x, y: r.top + r.height / 2 - panRef.current.y }
+  }, [targetRef])
+
   /** Live contacts, tracked in a map because pointer events carry ONE pointer
    *  each: the second finger's position is only ever knowable from what an
    *  earlier event stored. */
@@ -231,15 +246,14 @@ export function usePinchZoom({ targetRef, containRef, enabled = true, min, max, 
     // CURRENT midpoint is what keeps a corner detail under the fingers instead of
     // pushing it away as the content grows around its centre. Using the live
     // midpoint (not the seated one) also makes two fingers moving together pan.
-    const cx = window.innerWidth / 2
-    const cy = window.innerHeight / 2
+    const { x: cx, y: cy } = contentCentre()
     const anchorX = (p.startMid.x - cx - p.basePan.x) / p.baseZoom
     const anchorY = (p.startMid.y - cy - p.basePan.y) / p.baseZoom
     const mid = pinchMidpoint(pair.a, pair.b)
     setZoom(next)
     setPan(clampPan(mid.x - cx - anchorX * next, mid.y - cy - anchorY * next, next))
     return true
-  }, [clampZoom, clampPan, seatPinch])
+  }, [clampZoom, clampPan, seatPinch, contentCentre])
 
   /** Drop a contact. Ends the pinch on the FIRST lift (rather than the last),
    *  which is what stops the finger still down from being re-read as a one-finger
@@ -270,8 +284,7 @@ export function usePinchZoom({ targetRef, containRef, enabled = true, min, max, 
     const from = zoomRef.current
     const next = clampZoom(from * factor)
     if (next === from) return
-    const cx = window.innerWidth / 2
-    const cy = window.innerHeight / 2
+    const { x: cx, y: cy } = contentCentre()
     // Fall back to the centre when an event arrives without usable coordinates.
     // Pan PERSISTS, so a single non-finite focal would not just misplace one frame
     // — it would write NaN into the stored pan and leave the content invisible
@@ -282,7 +295,7 @@ export function usePinchZoom({ targetRef, containRef, enabled = true, min, max, 
     const anchorY = (fy - cy - panRef.current.y) / from
     setZoom(next)
     setPan(clampPan(fx - cx - anchorX * next, fy - cy - anchorY * next, next))
-  }, [clampZoom, clampPan])
+  }, [clampZoom, clampPan, contentCentre])
 
   /** Trackpad magnification, which reaches none of the pointer code above.
    *
@@ -390,7 +403,7 @@ export function usePinchZoom({ targetRef, containRef, enabled = true, min, max, 
   // the hook is the only place it belongs.
   return {
     zoom, setZoom, pan, setPan, pinching,
-    zoomRef, clampPan,
+    zoomRef, clampPan, contentCentre,
     trackPointerDown, trackPointerMove, trackPointerUp,
     reset,
   }

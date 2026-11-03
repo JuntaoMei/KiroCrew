@@ -129,6 +129,49 @@ describe('DiagramLightbox magnification', () => {
     expect(style).toContain('translate(0px, 0px)')
   })
 
+  // The overlay pads itself for the safe-area insets (p-safe), so with an uneven
+  // inset the content's centre is not the viewport's. The zoom must scale about
+  // where the content actually sits, or a double-tap or a pinch drifts away
+  // from the finger. Here the host's box is centred at x=178 (a 44px inset on
+  // the right of a 400px viewport), not at the viewport's x=200.
+  function offCentreHost(el: HTMLElement) {
+    vi.spyOn(el, 'getBoundingClientRect').mockImplementation(() => {
+      const t = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(el.getAttribute('style') ?? '')
+      const px = t ? Number(t[1]) : 0
+      const py = t ? Number(t[2]) : 0
+      // Untransformed box: 0..356 x 0..800; the translate moves it by pan.
+      return { left: px, top: py, right: 356 + px, bottom: 800 + py, width: 356, height: 800, x: px, y: py, toJSON: () => ({}) } as DOMRect
+    })
+  }
+
+  it('anchors a double-tap at the content centre when the overlay is padded off-centre', () => {
+    render(<DiagramLightbox svg={WITH_VIEWBOX} onClose={() => {}} />)
+    const h = host()
+    sizeHost(h, 4000, 4000)
+    offCentreHost(h)
+    // Tap at the content centre: scaling about that point needs no pan at all.
+    act(() => { fireEvent.pointerDown(h, touch(178, 400, 1)) })
+    act(() => { fireEvent.pointerUp(h, touch(178, 400, 1)) })
+    act(() => { fireEvent.pointerDown(h, touch(178, 400, 2)) })
+    act(() => { fireEvent.pointerUp(h, touch(178, 400, 2)) })
+    expect(h.getAttribute('style')).toContain('scale(2.5)')
+    expect(h.getAttribute('style')).toContain('translate(0px, 0px)')
+  })
+
+  it('anchors a pinch at the content centre when the overlay is padded off-centre', () => {
+    render(<DiagramLightbox svg={WITH_VIEWBOX} onClose={() => {}} />)
+    const h = host()
+    sizeHost(h, 4000, 4000)
+    offCentreHost(h)
+    // A pinch spread evenly about the content centre holds that centre still.
+    act(() => { fireEvent.pointerDown(h, touch(128, 400, 1)) })
+    act(() => { fireEvent.pointerDown(h, touch(228, 400, 2)) })
+    act(() => { fireEvent.pointerMove(h, touch(78, 400, 1)) })
+    act(() => { fireEvent.pointerMove(h, touch(278, 400, 2)) })
+    expect(h.getAttribute('style')).toContain('scale(2)')
+    expect(h.getAttribute('style')).toContain('translate(0px, 0px)')
+  })
+
   it('does not read two far-apart taps as one double-tap', () => {
     render(<DiagramLightbox svg={WITH_VIEWBOX} onClose={() => {}} />)
     const h = host()
