@@ -137,10 +137,14 @@ vi.mock('../components/FlyingQuote', async () => {
 
 // The split grid is stubbed to a prop recorder: what matters here is the
 // `openSideChat` capability ChatPage hands its panes (and when it withholds
-// it), not the grid's own layout, which SessionGridView's suite covers.
+// it) and the seed it opens the grid with, not the grid's own layout, which
+// SessionGridView's suite covers.
 interface GridProps {
   openSideChat?: (slot: string) => boolean | void | Promise<boolean | void>
   onCollapse?: (slot: string, anchorTs?: string, anchorMid?: string, gesture?: boolean) => void
+  seedSlot?: string | null
+  seedDir?: 'right' | 'down'
+  onClose?: () => void
 }
 let gridProps: GridProps | null = null
 vi.mock('../components/SessionGridView', async () => {
@@ -778,6 +782,87 @@ describe('ChatPage row callbacks — quote and ask', () => {
     await act(async () => { release({ ...OTHER_SLOT, key: 'chat-new', title: 'new' }); await pending })
     expect(store.getState().chat.activeSlot).toBe('chat-2')
     expect(screen.getByTestId('session-grid')).toBeTruthy()
+  })
+})
+
+describe('ChatPage split view entry direction', () => {
+  // The session menu reads the folder list while open; the default `{}` stub is not a list.
+  beforeEach(() => { apiSpy('chatFolders').mockResolvedValue([]) })
+
+  async function renderSingle() {
+    apiSpy('dashboardConfig').mockResolvedValue({ session_grid: true })
+    await renderTurn({ slots: [SLOT, OTHER_SLOT] })
+  }
+
+  /** Opens the session menu behind the title chevron. */
+  async function openSessionMenu() {
+    const trigger = await screen.findByRole('button', { name: 'Session options' })
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
+    fireEvent.click(trigger)
+  }
+
+  it('seeds the first split beside the session from the existing header button', async () => {
+    await renderSingle()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Enter split view' }))
+
+    await waitFor(() => expect(gridProps?.seedSlot).toBe('chat-1'))
+    expect(gridProps?.seedDir).toBe('right')
+  })
+
+  it('seeds the first split below the session from the session menu, which has no Split right row', async () => {
+    await renderSingle()
+
+    await openSessionMenu()
+    const down = await screen.findByRole('menuitem', { name: 'Split down' })
+    expect(screen.queryByRole('menuitem', { name: 'Split right' })).toBeNull()
+    fireEvent.click(down)
+
+    await waitFor(() => expect(gridProps?.seedSlot).toBe('chat-1'))
+    expect(gridProps?.seedDir).toBe('down')
+  })
+
+  it('does not carry a Split down entry into the next default entry', async () => {
+    await renderSingle()
+
+    await openSessionMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Split down' }))
+    await waitFor(() => expect(gridProps?.seedDir).toBe('down'))
+    act(() => { gridProps!.onClose!() })
+    fireEvent.click(await screen.findByRole('button', { name: 'Enter split view' }))
+
+    await waitFor(() => expect(gridProps?.seedDir).toBe('right'))
+  })
+
+  it('offers no split rows while the split feature is off', async () => {
+    apiSpy('dashboardConfig').mockResolvedValue({ session_grid: false })
+    await renderTurn({ slots: [SLOT, OTHER_SLOT] })
+
+    await openSessionMenu()
+
+    await screen.findAllByRole('menuitem')
+    expect(screen.queryByRole('menuitem', { name: 'Split right' })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: 'Split down' })).toBeNull()
+  })
+
+  it('offers no split rows for a session that belongs to a saved split', async () => {
+    localStorage.setItem('mc-split-layouts', JSON.stringify({
+      'chat-2': {
+        type: 'split', id: 'saved', dir: 'col', sizes: [0.5, 0.5],
+        children: [
+          { type: 'leaf', id: 'leaf-2', kind: 'session', slot: 'chat-2' },
+          { type: 'leaf', id: 'leaf-1', kind: 'session', slot: 'chat-1' },
+        ],
+      },
+    }))
+    await renderSingle()
+    await screen.findByRole('button', { name: 'Return to split view' })
+
+    await openSessionMenu()
+
+    await screen.findAllByRole('menuitem')
+    expect(screen.queryByRole('menuitem', { name: 'Split right' })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: 'Split down' })).toBeNull()
   })
 })
 
