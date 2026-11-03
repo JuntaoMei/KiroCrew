@@ -120,6 +120,12 @@ QUOTE_TEXT_MAX_LEN = 2048
 QUOTE_FIELD_MAX_LEN = 256
 QUOTE_ROLES = frozenset({"user", "assistant"})
 
+# The short display label a scripted ``POST /api/chat`` may carry (``banner`` in
+# the body). It rides on the user row's meta; the row's ``content`` and the turn's
+# input stay the full message. Bounded and redacted by ``normalize_banner``, the
+# monitor-loop banner's validator, so the two labels share one cap.
+CHAT_BANNER_META_KEY = "banner"
+
 
 def normalize_send_id(value: object) -> str | None:
     """Return *value* when it is a usable client send-correlation id, else None.
@@ -1186,6 +1192,7 @@ def queue_for_next_turn(
     steer_intent: bool = False,
     author: dict[str, Any] | None = None,
     admission: dict[str, Any] | None = None,
+    banner: str = "",
 ) -> str:
     """Append *message* to the slot's queue and announce it; return the queue id.
 
@@ -1298,6 +1305,9 @@ def queue_for_next_turn(
         # (``attribution.author_meta``). The drain unions it onto the row and
         # charges the drained turn to that person.
         meta["author"] = dict(author)
+    if banner:
+        # Already bounded and redacted by the caller (``normalize_banner``).
+        meta[CHAT_BANNER_META_KEY] = banner
     qid = slot.queue_append(
         message,
         meta=meta,
