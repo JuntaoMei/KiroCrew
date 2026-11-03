@@ -167,6 +167,32 @@ class TestCoverage:
         rows = log.search_sessions("title:hidden deploy")
         assert search_coverage(rows) == (1, 2)
 
+    def test_a_content_count_leaves_out_private_sessions(self, tmp_path: Path, monkeypatch) -> None:
+        """A plain search's counts leave out incognito and temporary sessions.
+
+        A caller that hides those rows compares the note's total with a listing
+        that leaves them out, so counting them would tell it how many there are.
+        """
+        _three_sessions(tmp_path)
+        for i, mode in enumerate(("incognito", "temporary")):
+            path = tmp_path / f"private{i}.jsonl"
+            path.write_text(
+                json.dumps({"_type": "metadata", "title": "secret", "memory_mode": mode})
+                + "\n"
+                + json.dumps({"role": "user", "content": "the platypus secret"})
+                + "\n",
+                encoding="utf-8",
+            )
+            os.utime(path, (500 + i, 500 + i))
+        _configure_window(monkeypatch, 2)
+        rows = ConversationLog(base_dir=tmp_path).search_sessions("platypus")
+        assert search_coverage(rows) == (2, 3)
+        # Private sessions inside the window are not counted as searched either.
+        for i in range(2):
+            os.utime(tmp_path / f"private{i}.jsonl", (9000 + i, 9000 + i))
+        rows = ConversationLog(base_dir=tmp_path).search_sessions("platypus")
+        assert search_coverage(rows) == (0, 3)
+
     def test_a_search_restricted_to_keys_reports_no_count(
         self, tmp_path: Path, monkeypatch
     ) -> None:

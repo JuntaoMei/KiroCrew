@@ -925,8 +925,11 @@ class SessionCatalogProjection:
         self._log._prune_search_memos({m["key"] for m in window})
         # How much of the store the query could reach, for the results' note.
         # Unknown (0) for *keys* alone: judging ownership past the window is the
-        # very read the window exists to bound.
-        eligible = len(sessions) if keys is None else 0
+        # very read the window exists to bound. The counts leave out incognito
+        # and temporary sessions: a caller that filters those rows out compares
+        # the total with a listing that leaves them out, so counting them would
+        # tell it how many private sessions this machine holds.
+        eligible = _visible_count(sessions) if keys is None else 0
         if title_filter is not None:
             window = [m for m in sessions if title_filter(m.get("title") or "")]
         if keys is not None:
@@ -941,7 +944,7 @@ class SessionCatalogProjection:
             window = window[:scan_window]
             searched = _visible_count(window) if eligible else 0
         else:
-            searched = len(window) if eligible else 0
+            searched = _visible_count(window) if eligible else 0
         allowed, rowids = self._index_shortlist(window, needles)
         if keys is None and title_filter is None:
             # Only an unrestricted search sees every live session's row; one
