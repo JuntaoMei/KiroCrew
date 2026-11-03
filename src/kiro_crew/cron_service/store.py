@@ -416,6 +416,7 @@ def _job_from_record(j: dict[str, Any], *, warn_on_coercion: bool = True) -> Cro
         hide_in_chat=j.get("hide_in_chat", False),
         folder_id=_guard_str("folder_id"),
         chat_folder_id=_guard_str("chat_folder_id"),
+        project_path=_guard_str("project_path"),
         model=_guard_str("model"),
         last_retry_count=_guard_num("last_retry_count", 0),
         last_retry_run_ts=_guard_num("last_retry_run_ts", 0.0),
@@ -652,12 +653,16 @@ def job_record(j: CronJob) -> dict[str, Any]:
         record["managed_by"] = j.managed_by
     if j.app_manifest_digest:
         record["app_manifest_digest"] = j.app_manifest_digest
+    # A job with no project directory saves to the bytes an older build wrote.
+    if j.project_path:
+        record["project_path"] = j.project_path
     return record
 
 
 #: Every key :func:`job_record` can write, read off the encoder itself so the two
 #: cannot drift: a job that sets each conditionally written key
-#: (``user_pause_generation``, ``managed_by``, ``app_manifest_digest``, and a
+#: (``user_pause_generation``, ``managed_by``, ``app_manifest_digest``,
+#: ``project_path``, and a
 #: non-default ``auto_pause_after_failures`` and ``alert_after_failures``, which
 #: are omitted at the default). A record key outside this set came from a newer
 #: build. A key inside it is this build's to write or to omit, so a value this
@@ -672,6 +677,7 @@ _KNOWN_JOB_KEYS = frozenset(
             user_pause_generation=1,
             managed_by="-",
             app_manifest_digest="-",
+            project_path="-",
             auto_pause_after_failures=0,
             alert_after_failures=2,
         )
