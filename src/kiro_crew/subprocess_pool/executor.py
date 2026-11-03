@@ -549,7 +549,9 @@ class _Child:
                 if header is None:
                     raise SubprocessPoolUnavailable("child closed the connection")
                 (length,) = _LEN.unpack(header)
-                response = _read_exactly(stdout, length, deadline)
+                response = _read_exactly(
+                    stdout, length, deadline, drain_secs=_ANSWERED_FRAME_DRAIN_SECS
+                )
                 if response is None:
                     raise SubprocessPoolUnavailable("child truncated its response")
                 if len(response) < 5:
@@ -619,7 +621,20 @@ class _ReaderLost(Exception):
 _CAN_SELECT_PIPES = os.name != "nt"
 
 
-def _read_exactly(stream: Any, count: int, deadline: float | None) -> bytes | None:
+# How long a read of an answer whose length header has already arrived waits for each
+# further chunk once the caller's deadline has passed.  The child builds its whole
+# response before it writes any of it, so after the header the realpath is done and
+# what is left is pipe transfer: a frame larger than the pipe buffer reaches the
+# caller in pieces, and a caller that gets the GIL back late between two pieces
+# would otherwise refuse an answer the child has already given.  Each wait starts
+# when the caller is running again, so the caller's own scheduling never spends it,
+# and a child that stops writing mid-frame is still refused this long after.
+_ANSWERED_FRAME_DRAIN_SECS = 0.5
+
+
+def _read_exactly(
+    stream: Any, count: int, deadline: float | None, *, drain_secs: float = 0.0
+) -> bytes | None:
     """Read exactly *count* bytes. ``None`` on EOF; :class:`_ChildTimeout` past *deadline*.
 
     A pipe read has no timeout of its own, so the deadline is armed with
@@ -627,6 +642,16 @@ def _read_exactly(stream: Any, count: int, deadline: float | None) -> bytes | No
     moment this fd has data. That is the property the whole design rests on: the
     waiting thread costs one GIL reacquisition, not one per path component, and
     not a poll loop that would reacquire on every tick.
+
+    A deadline that has passed is checked against the pipe, not against the clock
+    alone: the calling thread can get the GIL back after its deadline although the
+    child answered in time, and calling that a timeout kills a healthy child and
+    samples it idle in ``read`` on its request pipe, which the resolver then counts
+    as a load-arm miss.  So a spent deadline still polls the fd once with a zero
+    timeout and reads a frame that is already there.  The child's ``realpath`` has
+    completed when its answer is in the pipe, so this admits nothing the child did
+    not answer.  *drain_secs* replaces that zero timeout for the body of a frame
+    whose header has arrived (see ``_ANSWERED_FRAME_DRAIN_SECS``).
     """
     chunks: list[bytes] = []
     remaining = count
@@ -635,7 +660,7 @@ def _read_exactly(stream: Any, count: int, deadline: float | None) -> bytes | No
         if deadline is not None and _CAN_SELECT_PIPES:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise _ChildTimeout
+                left = drain_secs
             ready, _, _ = select.select([fileno], [], [], left)
             if not ready:
                 raise _ChildTimeout
@@ -993,6 +1018,14 @@ class SubprocessPoolExecutor(Executor):
             try:
                 item = self._free.get(timeout=remaining)
             except queue.Empty:
+                # A release can land between the wait timing out and this thread
+                # getting the GIL back; take a slot that is free now rather than
+                # refuse with one on the queue.
+                try:
+                    item = self._free.get_nowait()
+                except queue.Empty:
+                    item = None
+            if item is None:
                 exhausted = self._exhausted()
                 if exhausted is not None:
                     raise SubprocessPoolUnavailable(exhausted) from None

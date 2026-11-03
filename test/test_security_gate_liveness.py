@@ -640,7 +640,11 @@ def _url_payload_command(n: int) -> str:
 #: shape regex, the operator-listed lookup that reads the file only for that shape,
 #: its once-per-endpoint audit, and the second counterfactual keyword that keeps
 #: MCP discovery from assuming an operator entry. No check was relaxed elsewhere.
-_PACKAGE_LINE_BUDGET = 33_735
+#: Raised by 53, from 33,735, in ``paths_resolver``: the test that confines the
+#: cumulative wait allowance to a thread running an event loop, and the arm that
+#: refuses without spending a load-arm probe when the child was sampled idle on its
+#: request pipe, each with the note on why it admits nothing. No check was relaxed.
+_PACKAGE_LINE_BUDGET = 33_788
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

@@ -15,6 +15,7 @@ import time
 import types
 
 import pytest
+from path_gate_late_answer_helpers import LateAnswerClock
 
 from kiro_crew.security import _child_realpath as child_mod
 from kiro_crew.security.paths import _resolved_spellings_inline as _resolved_spellings
@@ -456,6 +457,71 @@ class TestCallerBudget:
             assert time.monotonic() - started < 30.0
         finally:
             executor.shutdown(wait=False)
+
+    @pytest.mark.skipif(
+        not executor_mod._CAN_SELECT_PIPES, reason="the per-read deadline needs select on a pipe"
+    )
+    def test_answer_in_pipe_at_deadline_is_read(self, tmp_path: pathlib.Path, monkeypatch) -> None:
+        # The calling thread can get the GIL back after its deadline although the
+        # child answered in time.  An answer already in the pipe is the child's
+        # completed realpath, so it is returned, and the healthy child is kept.
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(target)
+        executor = SubprocessPoolExecutor(workers=2, ceiling_secs=600.0)
+        try:
+            before = self._spawned(executor)
+            clock = LateAnswerClock(monkeypatch)
+            answer = executor.realpath_spellings(str(link), timeout=5.0)
+            assert clock.late_reads >= 1, "the double never made the read late"
+            assert clock.drains == [0.0, executor_mod._ANSWERED_FRAME_DRAIN_SECS]
+            assert str(target.resolve()) in answer
+            assert {child.proc.pid for child in executor._children if child.proc} == set(before)
+        finally:
+            executor.shutdown(wait=False)
+
+    @pytest.mark.skipif(
+        not executor_mod._CAN_SELECT_PIPES, reason="the per-read deadline needs select on a pipe"
+    )
+    def test_the_rest_of_an_answered_frame_is_drained_after_the_deadline(self, monkeypatch) -> None:
+        # An answer bigger than the pipe buffer arrives in pieces.  Once its header
+        # is in, the child's realpath is done, so a read whose deadline has passed
+        # waits up to ``drain_secs`` for each further piece instead of refusing.
+        # The second piece is written only after the read has seen the pipe empty
+        # past its deadline, so a zero-timeout poll there would refuse.
+        read_fd, write_fd = os.pipe()
+        reader = os.fdopen(read_fd, "rb", buffering=0)
+        writer = os.fdopen(write_fd, "wb", buffering=0)
+        writer.write(b"a" * 8)
+        real_select = executor_mod.select.select
+        polls: list[float] = []
+
+        def select_then_write(rlist, wlist, xlist, timeout):
+            polls.append(timeout)
+            if len(polls) == 2:
+                assert real_select(rlist, [], [], 0) == ([], [], []), "second piece came early"
+                writer.write(b"b" * 8)
+            return real_select(rlist, wlist, xlist, timeout)
+
+        monkeypatch.setattr(executor_mod, "select", types.SimpleNamespace(select=select_then_write))
+        try:
+            past = time.monotonic() - 1.0
+            got = executor_mod._read_exactly(reader, 16, past, drain_secs=30.0)
+        finally:
+            writer.close()
+            reader.close()
+        assert got == b"a" * 8 + b"b" * 8
+        assert polls == [30.0, 30.0]
+
+    @pytest.mark.skipif(
+        not executor_mod._CAN_SELECT_PIPES, reason="the per-read deadline needs select on a pipe"
+    )
+    def test_a_spent_deadline_with_nothing_in_the_pipe_still_times_out(self) -> None:
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd, "rb", buffering=0) as reader, os.fdopen(write_fd, "wb"):
+            with pytest.raises(executor_mod._ChildTimeout):
+                executor_mod._read_exactly(reader, 4, time.monotonic() - 1.0)
 
     def test_a_timed_out_child_is_destroyed_rather_than_reused(
         self, tmp_path: pathlib.Path

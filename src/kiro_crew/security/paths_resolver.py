@@ -17,6 +17,7 @@ gates read it, and this module imports no other part of the path floor.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import platform
@@ -109,7 +110,14 @@ _PATH_RESOLVE_REBUILD_TIMEOUT_SECS = 8.0
 # leaving 13s of the 25s watchdog for heartbeat age and other tool-call work.
 # Retain that spend until 25s after the LAST wait, not a fixed window boundary:
 # otherwise two adjacent windows can spend twice the cap inside one watchdog gap.
-# Background callers have their own allowance, never the event-loop thread's.
+#
+# Only a thread that is RUNNING an event loop pays it (:func:`_running_event_loop`):
+# the allowance exists for the loop's watchdog.  An off-loop caller (a memory read
+# pool, a tool-gate worker) is bounded by its own caller's wait, and under GIL
+# contention its waits are mostly the thread's own wait for the GIL, so charging
+# them refused plain files with no filesystem evidence.  A wedged mount still
+# refuses such a caller: its first charged miss opens the prefix cooldown, and the
+# cooldown applies to every thread.
 _PATH_RESOLVE_WAIT_CAP_SECS = 12.0
 
 
@@ -183,6 +191,16 @@ _FS_BLOCKING_SYSCALLS: frozenset[int] = _FS_BLOCKING_SYSCALLS_BY_ARCH.get(
 )
 
 
+# ``read``.  The resolver child calls it only on its request pipe (``realpath`` uses
+# the stat family and ``readlink``), so a child sampled in it was idle: it had not
+# yet picked the request up, or it had answered and the caller read the pipe too
+# late.  An unmapped architecture has no entry, so its samples take the paths above.
+_IDLE_ON_REQUEST_PIPE_BY_ARCH: dict[str, int] = {"x86_64": 0, "aarch64": 63}
+
+
+_IDLE_ON_REQUEST_PIPE: int | None = _IDLE_ON_REQUEST_PIPE_BY_ARCH.get(platform.machine())
+
+
 # stall prefix -> (monotonic deadline until which paths under it are refused,
 # consecutive stalls recorded under it -- drives the exponential backoff)
 _path_resolve_degraded: dict[str, tuple[float, int]] = {}
@@ -234,6 +252,15 @@ _child_fault_streak = 0
 
 
 _child_fault_warned = False
+
+
+def _running_event_loop() -> bool:
+    """True when the calling thread is running an event loop, the only payer of the allowance."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 def _outside_bounded_call() -> bool:
@@ -561,6 +588,16 @@ def _child_blocked_in_filesystem(sampled: bytes | None) -> bool:
     return blocked
 
 
+def _child_idle_on_request_pipe(sampled: bytes | None) -> bool:
+    """True when the child's sampled syscall was ``read`` on its request pipe."""
+    if sampled is None or _IDLE_ON_REQUEST_PIPE is None:
+        return False
+    try:
+        return int(sampled) == _IDLE_ON_REQUEST_PIPE
+    except ValueError:
+        return False
+
+
 def _load_arm_budget_spent(prefix: str) -> bool:
     """Record a load-arm probe under *prefix*; True once the window's allowance is gone.
 
@@ -787,16 +824,21 @@ def _run_resolution_bounded(
         _extend_cooldown(prefix)
         raise PathResolutionStalled(expanded, prefix)
     caller_tid = threading.get_ident()
-    with _path_resolve_lock:
-        if len(_path_resolve_thread_waits) > 64:
-            # Clearing live entries would let thread churn refund the loop's spend.
-            expired = [tid for tid, (end, _) in _path_resolve_thread_waits.items() if now >= end]
-            for expired_tid in expired:
-                del _path_resolve_thread_waits[expired_tid]
-        window_end, seconds_spent = _path_resolve_thread_waits.get(caller_tid, (0.0, 0.0))
-        if now >= window_end:
-            seconds_spent = 0.0
-    remaining = _PATH_RESOLVE_WAIT_CAP_SECS - seconds_spent
+    on_loop = _running_event_loop()
+    seconds_spent = 0.0
+    if on_loop:
+        with _path_resolve_lock:
+            if len(_path_resolve_thread_waits) > 64:
+                # Clearing live entries would let thread churn refund the loop's spend.
+                expired = [
+                    tid for tid, (end, _) in _path_resolve_thread_waits.items() if now >= end
+                ]
+                for expired_tid in expired:
+                    del _path_resolve_thread_waits[expired_tid]
+            window_end, seconds_spent = _path_resolve_thread_waits.get(caller_tid, (0.0, 0.0))
+            if now >= window_end:
+                seconds_spent = 0.0
+    remaining = _PATH_RESOLVE_WAIT_CAP_SECS - seconds_spent if on_loop else float("inf")
     if remaining <= 0:
         # No work ran, so this refusal says nothing about the prefix's mount.
         logger.debug(
@@ -818,6 +860,17 @@ def _run_resolution_bounded(
             logger.debug(
                 "sensitive-path symlink resolution refused: the resolver pool was "
                 "saturated and the resolution never started; prefix not charged"
+            )
+            raise PathResolutionStalled(expanded, prefix) from None
+        if _child_idle_on_request_pipe(sampled):
+            # The child was waiting for work, not on the filesystem, so the budget
+            # went on the calling thread's own scheduling.  Refuse this call, and
+            # spend none of the load arm's probes: those bound repeated waits on a
+            # child that IS working, and an idle sample is not one.  The event loop
+            # is still bounded by its allowance, and an off-loop thread by its caller.
+            logger.debug(
+                "sensitive-path resolution timed out with the resolver child idle on its "
+                "request pipe; prefix not charged"
             )
             raise PathResolutionStalled(expanded, prefix) from None
         if not _child_blocked_in_filesystem(sampled) and not _load_arm_budget_spent(prefix):
@@ -853,7 +906,7 @@ def _run_resolution_bounded(
     finally:
         wait_end = _path_resolve_clock()
         elapsed = max(0.0, wait_end - wait_start)
-        if elapsed >= _PATH_RESOLVE_WAIT_FLOOR_SECS:
+        if on_loop and elapsed >= _PATH_RESOLVE_WAIT_FLOOR_SECS:
             with _path_resolve_lock:
                 _path_resolve_thread_waits[caller_tid] = (
                     wait_end + _PATH_RESOLVE_WAIT_WINDOW_SECS,
