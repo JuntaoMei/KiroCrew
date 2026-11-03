@@ -687,6 +687,64 @@ class TestPeriodicSweepIntegration:
         pids, ok = _collect_active_pids({"s1": sess})
         assert ok is False
 
+    def test_skip_sweep_when_provider_has_no_client(self) -> None:
+        """A provider with no ``client`` and no process attribute (a proxy) hides
+        its live process, so the sweep must not run against it."""
+        from types import SimpleNamespace
+
+        from kiro_crew.session_pid import _collect_active_pids
+
+        known = self._make_session(pid=12345)
+        proxy = SimpleNamespace(provider=SimpleNamespace(client=None))
+        pids, ok = _collect_active_pids({"s1": known, "s2": proxy})
+        assert ok is False
+        no_attr = SimpleNamespace(provider=SimpleNamespace())
+        assert _collect_active_pids({"s1": no_attr})[1] is False
+
+    def test_provider_with_process_attributes_and_no_client_still_sweeps(self) -> None:
+        """A provider that carries its process as ``_proc``/``_active_proc`` is a
+        known shape: an idle one (both None) holds no process to protect."""
+        from types import SimpleNamespace
+
+        from kiro_crew.session_pid import _collect_active_pids
+        from kiro_crew.testing.ids import UNALLOCATABLE_PID
+
+        idle = SimpleNamespace(provider=SimpleNamespace(client=None, _proc=None, _active_proc=None))
+        live = SimpleNamespace(
+            provider=SimpleNamespace(_proc=SimpleNamespace(returncode=None, pid=UNALLOCATABLE_PID))
+        )
+        pids, ok = _collect_active_pids({"s1": idle, "s2": live})
+        assert ok is True
+        assert UNALLOCATABLE_PID in pids
+
+    def test_session_provider_held_directly_is_swept_with_its_pid(self) -> None:
+        """A task-runner step session holds an ``AcpSessionProvider`` as its provider:
+        no ``client``, its PID read off its runtime. The sweep still runs and
+        protects that PID; a runtime with no process protects nothing."""
+        from types import SimpleNamespace
+
+        from kiro_crew.acp.session_provider import AcpSessionProvider
+        from kiro_crew.session_pid import _collect_active_pids
+        from kiro_crew.testing.ids import unallocatable_pids
+
+        (live_pid,) = unallocatable_pids(1)
+        live = AcpSessionProvider.__new__(AcpSessionProvider)
+        live._runtime = SimpleNamespace(pid=live_pid)
+        idle = AcpSessionProvider.__new__(AcpSessionProvider)
+        idle._runtime = SimpleNamespace(pid=None)
+        assert getattr(live, "client", None) is None, "the shape under test has no client"
+
+        pids, ok = _collect_active_pids(
+            {"s1": SimpleNamespace(provider=live), "s2": SimpleNamespace(provider=idle)}
+        )
+        assert ok is True
+        assert live_pid in pids
+        broken = AcpSessionProvider.__new__(AcpSessionProvider)
+        broken._runtime = SimpleNamespace(pid="not-a-pid")
+        assert _collect_active_pids({"s1": SimpleNamespace(provider=broken)})[1] is False
+        broken._runtime = SimpleNamespace()  # the property itself raises
+        assert _collect_active_pids({"s1": SimpleNamespace(provider=broken)})[1] is False
+
     @pytest.mark.asyncio
     async def test_managed_pid_not_killed(self, session_pid_file: Path) -> None:
         """Active session PID is not killed even if in PID file."""

@@ -371,11 +371,45 @@ def _collect_active_pids(sessions: "dict") -> tuple[set[int], bool]:
 
     If any session's PID is not an int or extraction fails,
     returns ``(partial_set, False)`` — caller should skip the sweep.
+
+    A provider is read through one of four shapes: an ACP ``client`` with a
+    ``_pid``, a provider carrying ``_pid`` itself (``AcpSessionProvider``, which a
+    task-runner step session holds directly; ``None`` there means its runtime has
+    no process), or the ``_proc`` / ``_active_proc`` subprocess attributes. A
+    provider with none of them (a proxy, or a type added later) hides its live
+    process, which would then look like an orphan, so that also returns
+    ``ok=False``: the sweep runs only when every session's process is known.
     """
     pids: set[int] = _protected_pids()  # shared _bg / subagent runtimes shielded from the sweep
     for sess in sessions.values():
         # ACP provider: long-lived process PID via client._pid
         client = getattr(sess.provider, "client", None)
+        # Looked up on the class too: a ``_pid`` property that raises is still a PID
+        # source, and must fail the sweep closed below rather than read as absent.
+        if client is None and (
+            hasattr(type(sess.provider), "_pid") or hasattr(sess.provider, "_pid")
+        ):
+            try:
+                own_pid = sess.provider._pid
+            except Exception:
+                logger.warning("Failed to read PID for session — skipping orphan sweep this cycle")
+                return pids, False
+            if own_pid is not None and not isinstance(own_pid, int):
+                logger.warning(
+                    "PID for session is not an int (%r) — skipping orphan sweep this cycle",
+                    own_pid,
+                )
+                return pids, False
+            if own_pid is not None:
+                pids.add(own_pid)
+        elif client is None and not any(
+            hasattr(sess.provider, attr) for attr in ("_proc", "_active_proc")
+        ):
+            logger.warning(
+                "Session provider %s exposes no process PID — skipping orphan sweep this cycle",
+                type(sess.provider).__name__,
+            )
+            return pids, False
         if client is not None:
             try:
                 pid = client._pid  # type: ignore[attr-defined]
