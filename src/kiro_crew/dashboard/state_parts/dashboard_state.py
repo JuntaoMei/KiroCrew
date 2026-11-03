@@ -1270,6 +1270,8 @@ class DashboardState:
     broadcast_context_usage = _slots_push.broadcast_context_usage
     deliver_ws_owners = _slots_push.deliver_ws_owners
     broadcast_ws_owners = _slots_push.broadcast_ws_owners
+    hold_turn_heartbeat = _slots_push.hold_turn_heartbeat
+    release_turn_heartbeat = _slots_push.release_turn_heartbeat
     ws_client_count = _slots_push.ws_client_count
     dashboard_user_ws_count = _slots_push.dashboard_user_ws_count
     set_fold_delta_capable = _slots_push.set_fold_delta_capable
