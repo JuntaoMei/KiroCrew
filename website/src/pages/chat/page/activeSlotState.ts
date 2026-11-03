@@ -17,6 +17,24 @@ import { slotRowByKey } from '../../../store/slotIndex'
 import { crewRootOf } from '../../../lib/crewMode'
 import { useEnvironmentStartLabel } from '../../../components/sessionEnvironmentHooks'
 
+/**
+ * Whether a session's memory mode keeps tips from being fetched or shown.
+ * Temporary sessions ("no memory reads or writes") must never show
+ * memory-personalized tips, and an incognito session keeps no record of what
+ * was recommended in it, so neither fetches a tip.
+ */
+export function tipsBlockedByMemoryMode(mode: unknown): boolean {
+  return mode === 'temporary' || mode === 'incognito'
+}
+
+/** {@link tipsBlockedByMemoryMode} for the active session. */
+export function selectActiveSlotHidesTips(s: {
+  dashboard: { slots: Parameters<typeof slotRowByKey>[0] }
+  chat: { activeSlot: string | null }
+}): boolean {
+  return tipsBlockedByMemoryMode(slotRowByKey(s.dashboard.slots, s.chat.activeSlot)?.memory_mode)
+}
+
 // Stable identity for the "no follow-up cards" case: returning a fresh {} from
 // the selector would make it a new reference on every store update.
 const EMPTY_FOLLOWUPS: Record<string, { items: FollowupItem[]; ts: number }> = {}
@@ -242,10 +260,8 @@ export function useActiveSlotState({
    *  frame where the sidebar IS the whole page. */
   const navigateToEmbeddedSlot = useCallback((key: string) => navigate(`/embed/chat/${key}`), [navigate])
   const [splitAnchor, setSplitAnchor] = useState<string | null>(null)
-  // Temporary sessions ("no memory reads or writes") must never show
-  // memory-personalized tips.
-  const tipTemporary = useAppSelector(s => slotRowByKey(s.dashboard.slots, s.chat.activeSlot)?.memory_mode === 'temporary')
-  const tipBlocked = tipTemporary || splitMode || embedMode === 'sessions'
+  const tipMemoryBlocked = useAppSelector(selectActiveSlotHidesTips)
+  const tipBlocked = tipMemoryBlocked || splitMode || embedMode === 'sessions'
   const { tip: activeTip, dismiss: dismissTip } = useTipTrigger(!!slotRunning, tipSuppressed, activeSlot, tipBlocked)
   const slotState = useAppSelector(s => s.chat.slotState)
   const contextPct = useAppSelector(s => s.chat.slotContextPct[s.chat.activeSlot ?? ''] ?? 0)

@@ -29,6 +29,7 @@ from kiro_crew.memory_stores import DEFAULT_MEMORY_STORE
 from kiro_crew.platform import PROFILE_STANDALONE, current_context, safe_context_call
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls
 from kiro_crew.tips_allowlist import TIP_DOC_ALLOWLIST
+from kiro_crew.tips_metrics import record_tip_feedback_metric, tip_metric_labels
 
 # Re-exported: ``tips.CatalogEntry`` is the historical import path, and the
 # dataclass moved to the import-light ``tips_pool`` so an edition composition
@@ -209,6 +210,11 @@ class TipsState:
     # stable doc identity and doc-level dismissal would silently fail.
     # Bounded: pruned to the most recent 32 entries.
     shown_docs: dict[str, str] = field(default_factory=dict)
+    # id -> source ("curated" / "catalog" / "generated") of the same shown tip,
+    # for the kirocrew.tips.feedback counter (tips_metrics.py): the source is
+    # read where the tip was served, since its id alone cannot say. Pruned with
+    # shown_docs.
+    shown_sources: dict[str, str] = field(default_factory=dict)
     # In memory only, never saved. ``load_failed``: tips_state.json exists but
     # could not be read, so these are defaults that must never replace it
     # (_save_state skips the write, get_tips_cache does not keep it).
@@ -293,6 +299,11 @@ def _load_state() -> TipsState:
             for k, v in _typed("shown_docs", dict, {}).items()
             if isinstance(k, str) and isinstance(v, str)
         }
+        shown_sources = {
+            k: v
+            for k, v in _typed("shown_sources", dict, {}).items()
+            if isinstance(k, str) and v in ("curated", "catalog", "generated")
+        }
         snoozed_docs = {
             k: fv
             for k, v in _typed("snoozed_docs", dict, {}).items()
@@ -304,6 +315,7 @@ def _load_state() -> TipsState:
             dismissed=dismissed,
             dismissed_docs=dismissed_docs,
             shown_docs=shown_docs,
+            shown_sources=shown_sources,
             snoozed_docs=snoozed_docs,
             snoozed=snoozed,
             opted_out=_typed("opted_out", bool, False),
@@ -417,6 +429,7 @@ def _save_state(st: TipsState) -> None:
                 "dismissed": st.dismissed,
                 "dismissed_docs": st.dismissed_docs,
                 "shown_docs": st.shown_docs,
+                "shown_sources": st.shown_sources,
                 "snoozed_docs": st.snoozed_docs,
                 "snoozed": st.snoozed,
                 "opted_out": st.opted_out,
@@ -695,6 +708,7 @@ def _reconcile_pool(st: TipsState, pool_id: str) -> bool:
     st.tips = []
     st.offered = None
     st.shown_docs = {}
+    st.shown_sources = {}
     st.last_generated = 0.0
     return True
 
@@ -1457,6 +1471,9 @@ async def api_tips_feedback(request: web.Request) -> web.Response:
     now = time.time()
 
     async with cache._lock:
+        # Labelled BEFORE the action mutates state: "shown" and "ack" clear the
+        # offered tip, which is one of the places the doc is read from.
+        tip_source, tip_doc = tip_metric_labels(cache, st, tip_id)
         if action == "shown":
             # Display-time signal: start cadence + release the offered slot, but
             # keep the tip eligible (NOT dismissed) for future re-selection.
@@ -1468,6 +1485,10 @@ async def api_tips_feedback(request: web.Request) -> web.Response:
                     st.shown_docs[tip_id] = doc_val
                     while len(st.shown_docs) > 32:
                         st.shown_docs.pop(next(iter(st.shown_docs)))
+                    if tip_source in ("curated", "catalog", "generated"):
+                        st.shown_sources[tip_id] = tip_source
+                    for stale in [k for k in st.shown_sources if k not in st.shown_docs]:
+                        del st.shown_sources[stale]
             st.last_shown_ts = now
             st.offered = None
         elif action in ("ack", "dismiss"):
@@ -1532,4 +1553,5 @@ async def api_tips_feedback(request: web.Request) -> web.Response:
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _save_state, st)
+    record_tip_feedback_metric(state, request, action, tip_source, tip_doc)
     return web.json_response({"ok": True})
