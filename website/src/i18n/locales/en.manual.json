@@ -5641,6 +5641,7 @@
         "search_contents": "Search file contents",
         "search_mode": "Search mode",
         "search_names": "Search file names",
+        "show_hidden_files": "Show hidden files",
         "tree_mode": "File list mode",
         "content_engine_slow": "This host has no ripgrep, so the search took the slower built-in scan.",
         "content_one_row_per_file": "one row per file"

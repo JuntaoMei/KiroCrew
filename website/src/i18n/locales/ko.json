@@ -12450,6 +12450,7 @@
         "search_contents": "파일 내용 검색",
         "search_mode": "검색 모드",
         "search_names": "파일 이름 검색",
+        "show_hidden_files": "숨김 파일 표시",
         "tree_mode": "파일 목록 모드",
         "content_engine_slow": "이 호스트에는 ripgrep이 없으므로 검색이 더 느린 내장 스캔으로 실행되었습니다.",
         "content_one_row_per_file": "파일당 한 행"

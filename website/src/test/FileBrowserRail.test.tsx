@@ -334,6 +334,38 @@ describe('FileBrowserRail file opens', () => {
   })
 })
 
+describe('FileBrowserRail hidden files toggle', () => {
+  it('starts off, persists a flip and refetches both Files listings', async () => {
+    const { qc } = mount()
+    const toggle = screen.getByLabelText('Show hidden files')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await waitFor(() => expect(H.api.projectTree).toHaveBeenCalledTimes(1))
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(localStorage.getItem('mc-files-show-hidden')).toBe('1')
+    expect(spy.mock.calls.map(c => (c[0] as { queryKey: unknown[] }).queryKey)).toEqual([
+      ['project-tree'],
+      ['browse-files'],
+    ])
+    await waitFor(() => expect(H.api.projectTree).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(localStorage.getItem('mc-files-show-hidden')).toBe('0')
+  })
+
+  it('remembers the choice across a remount and does not refetch on mount', async () => {
+    localStorage.setItem('mc-files-show-hidden', '1')
+    const { qc } = mount()
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    expect(screen.getByLabelText('Show hidden files')).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() => expect(H.api.projectTree).toHaveBeenCalledTimes(1))
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
 describe('FileBrowserRail refresh', () => {
   it('hands the agent the journaled server report, not the translated sentence', async () => {
     // The notice shows a composed line ("Couldn't load the file tree — Refresh to retry"), which is

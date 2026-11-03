@@ -12704,6 +12704,7 @@
         "search_contents": "फ़ाइल सामग्री खोजें",
         "search_mode": "खोज मोड",
         "search_names": "फ़ाइल नाम खोजें",
+        "show_hidden_files": "छिपी फ़ाइलें दिखाएँ",
         "tree_mode": "फ़ाइल सूची मोड",
         "content_engine_slow": "इस होस्ट पर ripgrep नहीं है, इसलिए खोज धीमे अंतर्निहित स्कैन से की गई।",
         "content_one_row_per_file": "प्रति फ़ाइल एक पंक्ति"

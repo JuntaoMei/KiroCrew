@@ -12958,6 +12958,7 @@
         "search_contents": "Buscar conteúdo dos arquivos",
         "search_mode": "Modo de busca",
         "search_names": "Buscar nomes de arquivo",
+        "show_hidden_files": "Mostrar arquivos ocultos",
         "tree_mode": "Modo de lista de arquivos",
         "content_engine_slow": "Este host não tem ripgrep, portanto a busca usou a varredura interna mais lenta.",
         "content_one_row_per_file": "uma linha por arquivo"

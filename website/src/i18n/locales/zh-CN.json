@@ -12450,6 +12450,7 @@
         "search_contents": "搜索文件内容",
         "search_mode": "搜索模式",
         "search_names": "搜索文件名",
+        "show_hidden_files": "显示隐藏文件",
         "tree_mode": "文件列表模式",
         "content_engine_slow": "此主机没有 ripgrep，因此搜索使用了较慢的内置扫描。",
         "content_one_row_per_file": "每个文件一行"

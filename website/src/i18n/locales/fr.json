@@ -12958,6 +12958,7 @@
         "search_contents": "Rechercher dans le contenu des fichiers",
         "search_mode": "Mode de recherche",
         "search_names": "Rechercher dans les noms de fichiers",
+        "show_hidden_files": "Afficher les fichiers masqués",
         "tree_mode": "Mode liste de fichiers",
         "content_engine_slow": "Cet hôte n'a pas ripgrep, la recherche a donc utilisé le balayage interne plus lent.",
         "content_one_row_per_file": "une ligne par fichier"
